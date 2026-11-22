@@ -7,7 +7,7 @@ mod tests {
     use isobmff_boxes::{IdentifiedMediaDataBox, SampleToChunkBox, TimeToSampleBox};
     use isobmff_core::BoxDefinition;
     use isobmff_test_support::conformance_files;
-    use isobmff_test_support::fixtures::fragments_ahead_of_their_samples;
+    use isobmff_test_support::fixtures::{fragments_ahead_of_their_samples, names_another_file};
     use std::collections::BTreeMap;
 
     /// The fixtures whose samples all lie after the `moov`
@@ -1045,15 +1045,7 @@ mod tests {
                         movie
                             .trak
                             .iter()
-                            .filter(|trak| {
-                                trak.mdia
-                                    .minf
-                                    .dinf
-                                    .dref
-                                    .data_entries
-                                    .iter()
-                                    .any(|entry| !entry.is_in_this_file())
-                            })
+                            .filter(|trak| names_another_file(&trak.mdia.minf.dinf.dref))
                             .map(|trak| trak.tkhd.track_id),
                     );
                 }

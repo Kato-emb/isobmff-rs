@@ -8,7 +8,7 @@ mod tests {
         CompositionOffsetBox, CompositionOffsetEntry, EditBox, EditListBox, EditListEntry,
         MovieBox, MovieExtendsBox, SampleFlags, TrackBox,
     };
-    use isobmff_test_support::fixtures::{movie, track};
+    use isobmff_test_support::fixtures::{movie, names_another_file, track};
 
     /// Track `track_id` of three samples lasting 1 each in media of `timescale`, composed at the offsets `offsets`, whose edits are `(edit_duration, media_time)` (no edit list where `None`)
     fn timed_track(
@@ -648,15 +648,7 @@ mod tests {
                 // Why leave out a track in another file: ffprobe does not
                 // follow a `url ` or `urn ` data reference, and reads its
                 // offsets in this file.
-                .filter(|trak| {
-                    trak.mdia
-                        .minf
-                        .dinf
-                        .dref
-                        .data_entries
-                        .iter()
-                        .all(isobmff_boxes::DataEntry::is_in_this_file)
-                })
+                .filter(|trak| !names_another_file(&trak.mdia.minf.dinf.dref))
                 .collect();
             if edited.is_empty() {
                 continue;

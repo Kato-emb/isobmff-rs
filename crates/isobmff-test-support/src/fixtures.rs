@@ -2,10 +2,10 @@
 
 use isobmff_boxes::{
     ChunkLargeOffsetBox, ChunkOffsetBox, ChunkOffsetVariant, DataEntry, DataEntrySeqNumImdaBox,
-    DataEntryUrlBox, MovieBox, MovieExtendsBox, MovieFragmentBox, SampleDescription, SampleEntry,
-    SampleSizeBox, SampleSizeVariant, SampleSizes, SampleToChunkBox, SampleToChunkEntry,
-    TimeToSampleBox, TimeToSampleEntry, TrackBox, TrackExtendsBox, TrackFragmentBox, TrackRunBox,
-    TrackRunSamples,
+    DataEntryUrlBox, DataReferenceBox, MovieBox, MovieExtendsBox, MovieFragmentBox,
+    SampleDescription, SampleEntry, SampleSizeBox, SampleSizeVariant, SampleSizes,
+    SampleToChunkBox, SampleToChunkEntry, TimeToSampleBox, TimeToSampleEntry, TrackBox,
+    TrackExtendsBox, TrackFragmentBox, TrackRunBox, TrackRunSamples,
 };
 use isobmff_core::{
     BoxDefinition, BoxEncode, BoxHeader, BoxSize, BoxType, ExtendedSize, FourCc, Utf8String,
@@ -87,6 +87,18 @@ pub fn in_another_file(mut trak: TrackBox) -> TrackBox {
     url.location = Some(Utf8String::from_slice(b"other.mp4"));
     trak.mdia.minf.dinf.dref.data_entries = Vec::from([DataEntry::Url(url)]);
     trak
+}
+
+/// Returns whether an entry of `dref` names another file for the media data, as a `url ` with a `location` or a `urn ` does, ISO/IEC 14496-12 §8.7.2.3
+///
+/// An entry of a type this crate does not read counts as naming another
+/// file, and an `imda` entry as this file, as
+/// [`DataEntry::is_in_this_file`] says.
+#[must_use]
+pub fn names_another_file(dref: &DataReferenceBox) -> bool {
+    dref.data_entries
+        .iter()
+        .any(|entry| !entry.is_in_this_file())
 }
 
 /// Returns `value` written as a box

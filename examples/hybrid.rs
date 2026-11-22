@@ -276,6 +276,7 @@ mod tests {
     use isobmff::boxes::MovieBox;
     use isobmff::framing::{BoxReader, Event, FramerConfig};
     use isobmff::{Demuxer, DemuxerConfig, SampleProperties, demux, structure_data};
+    use isobmff_test_support::fixtures::names_another_file;
     use isobmff_test_support::{conformance_files, ffprobe, ffprobe_packets};
 
     use super::{MEDIA_DATA_HEADER_LENGTH, hybrid};
@@ -294,15 +295,11 @@ mod tests {
                         // Why read a movie with a track in another file as
                         // unreadable: the example writes the samples of one
                         // file alone.
-                        if moov.trak.iter().any(|trak| {
-                            trak.mdia
-                                .minf
-                                .dinf
-                                .dref
-                                .data_entries
-                                .iter()
-                                .any(|entry| !entry.is_in_this_file())
-                        }) {
+                        if moov
+                            .trak
+                            .iter()
+                            .any(|trak| names_another_file(&trak.mdia.minf.dinf.dref))
+                        {
                             readable = false;
                         }
                         for trak in &moov.trak {
