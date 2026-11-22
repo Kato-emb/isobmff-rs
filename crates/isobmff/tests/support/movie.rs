@@ -1,6 +1,6 @@
 //! The `moov` of a file and the samples it declares, and the packets ffprobe reads, which the tests of reading and writing sample tables share
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use isobmff::SampleLocation;
@@ -9,6 +9,7 @@ use isobmff::structure_data::{Error, StructureDataReader};
 use isobmff_boxes::MovieBox;
 use isobmff_core::{BoxDecode, BoxDefinition};
 use isobmff_test_support::ffprobe;
+use isobmff_test_support::fixtures::names_another_file;
 use isobmff_test_support::serde_json::{self, Value};
 
 /// The most samples the tests resolve from one `moov`
@@ -37,6 +38,16 @@ pub(crate) fn movie_of(file: &[u8]) -> Option<MovieBox> {
         }
     }
     movie
+}
+
+/// `track_ID` of each track of `movie` whose data references name another file, whose bytes neither this crate's demuxer nor ffprobe reads
+pub(crate) fn tracks_in_other_files(movie: &MovieBox) -> BTreeSet<u32> {
+    movie
+        .trak
+        .iter()
+        .filter(|trak| names_another_file(&trak.mdia.minf.dinf.dref))
+        .map(|trak| trak.tkhd.track_id)
+        .collect()
 }
 
 /// The location of each sample the tracks of `movie` declare, in the order of their file offsets

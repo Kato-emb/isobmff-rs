@@ -7,7 +7,7 @@ use isobmff::{Demuxer, DemuxerConfig};
 use isobmff_boxes::{FileTypeBox, MovieBox, SampleFlags};
 use isobmff_core::FourCc;
 use isobmff_test_support::FfprobePacket;
-use isobmff_test_support::fixtures::track;
+use isobmff_test_support::fixtures::{names_another_file, track};
 
 /// What a demuxer reads of a file: its `ftyp`, its `moov`, and every sample of its tracks with its bytes, in file order
 pub(crate) struct Read {
@@ -59,6 +59,14 @@ pub(crate) fn read(file: &[u8]) -> Option<Read> {
         fragment_starts,
         errors,
     })
+}
+
+/// Whether a track of `movie` names another file in its data references, whose samples the muxers do not write
+pub(crate) fn has_tracks_in_other_files(movie: &MovieBox) -> bool {
+    movie
+        .trak
+        .iter()
+        .any(|trak| names_another_file(&trak.mdia.minf.dinf.dref))
 }
 
 /// The file type of an MP4 file, ISO/IEC 14496-14

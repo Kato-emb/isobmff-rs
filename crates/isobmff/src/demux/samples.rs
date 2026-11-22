@@ -1,10 +1,10 @@
-//! [`Samples`], the locations of the samples the demuxer has read, and the bytes of the one it gathers
+//! [`Samples`], the locations of the samples the demuxer has read, and which of them it wants the bytes of
 
 use alloc::vec::Vec;
 
 use crate::SampleLocation;
 
-/// The samples of the `moov` and of the `moof`s read, and how far they are reported and their bytes gathered
+/// The samples of the `moov` and of the `moof`s read, and how far they are reported and handed over to be gathered
 #[derive(Debug, Clone, Default)]
 pub(super) struct Samples {
     /// The location of each sample, in the order of their file offsets
@@ -13,8 +13,6 @@ pub(super) struct Samples {
     reported: usize,
     /// Index of the first location whose bytes may still be requested
     next: usize,
-    /// The bytes of the sample gathered, or being gathered
-    bytes: Vec<u8>,
     /// `track_ID` of each track whose samples are lent
     subscribed: Vec<u32>,
 }
@@ -69,13 +67,21 @@ impl Samples {
         self.locations.extend(locations);
     }
 
-    /// Drops the locations of the samples lent, or before the `moof` at file offset `offset`, and counts those left as reported
-    pub(super) fn drop_before(&mut self, offset: u64) {
+    /// Drops the locations of the samples lent, before the `moof` at file offset `offset`, or not in this file as `is_in_this_file` tells, and counts those left as reported
+    pub(super) fn drop_before(
+        &mut self,
+        offset: u64,
+        is_in_this_file: impl Fn(&SampleLocation) -> bool,
+    ) {
         // Why drop the locations before the `moof`: a sample of a subscribed
         // track before it was lent before the box reader passed it, and the
         // locations would otherwise grow with every fragment.
+        // Why drop those in another file whatever their offset: their offset
+        // is one of that file, not comparable with the `moof`'s, and their
+        // bytes are never requested once their locations are reported.
         self.locations.drain(..self.next);
-        self.locations.retain(|location| location.offset >= offset);
+        self.locations
+            .retain(|location| location.offset >= offset && is_in_this_file(location));
         self.next = 0;
         self.reported = self.locations.len();
     }
@@ -85,8 +91,12 @@ impl Samples {
         length_of(self.locations.len())
     }
 
-    /// The next sample of a subscribed track whose bytes are wanted before the file offset `before` the box reader wants, with its index
-    pub(super) fn target(&self, before: Option<u64>) -> Option<(usize, SampleLocation)> {
+    /// The next sample of a subscribed track, in this file as `is_in_this_file` tells, whose bytes are wanted before the file offset `before` the box reader wants, with its index
+    pub(super) fn target(
+        &self,
+        before: Option<u64>,
+        is_in_this_file: impl Fn(&SampleLocation) -> bool,
+    ) -> Option<(usize, SampleLocation)> {
         // Why also before the end of the input when the box reader wants
         // none: an `mdat` of size 0 runs to the end of the file, and its
         // samples are wanted though no box follows it.
@@ -102,40 +112,15 @@ impl Samples {
             .take_while(|(_, location)| {
                 location.offset < before || (location.size == 0 && location.offset == before)
             })
-            .find(|(_, location)| self.subscribed.contains(&location.properties.track_id))
+            .find(|(_, location)| {
+                self.subscribed.contains(&location.properties.track_id) && is_in_this_file(location)
+            })
             .map(|(index, &location)| (start.saturating_add(index), location))
     }
 
     /// Requests no bytes of the samples up to the one at `index`
     pub(super) fn pass(&mut self, index: usize) {
         self.next = index.saturating_add(1);
-    }
-
-    /// The bytes of the sample gathered, or being gathered
-    pub(super) fn bytes(&self) -> &[u8] {
-        &self.bytes
-    }
-
-    /// How many bytes of the sample being gathered are in hand
-    pub(super) fn gathered(&self) -> u64 {
-        length_of(self.bytes.len())
-    }
-
-    /// How many bytes of the sample at `index` are still to be gathered
-    pub(super) fn remaining(&self, index: usize) -> u64 {
-        self.location(index)
-            .map_or(0, |location| u64::from(location.size))
-            .saturating_sub(self.gathered())
-    }
-
-    /// Adds bytes of the sample being gathered
-    pub(super) fn gather(&mut self, bytes: &[u8]) {
-        self.bytes.extend_from_slice(bytes);
-    }
-
-    /// Drops the bytes gathered
-    pub(super) fn clear_bytes(&mut self) {
-        self.bytes.clear();
     }
 }
 

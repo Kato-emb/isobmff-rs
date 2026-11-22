@@ -39,8 +39,9 @@ FFmpeg or MP4Box, or from an example in the specification, never by this
 library's own writer, and its bytes are committed. A file the specification
 does not allow, such as tables that disagree, is a fixture FFmpeg wrote with a
 field of one of its boxes changed in place by `xtask`; a file FFmpeg does not
-write, such as one whose media data is in an `imda`, is one with its boxes
-rewritten by `xtask`. `xtask` depends on no crate
+write, such as one whose media data is in an `imda` or in another file, is
+one with its boxes rewritten by `xtask`, which writes that other file beside
+it. `xtask` depends on no crate
 of this workspace, and CI checks that; regeneration runs on a host that has
 the tools, not in CI. `cargo xtask fixtures` regenerates them;
 `cargo xtask fixtures --help` lists what each holds and the command that made

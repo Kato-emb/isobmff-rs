@@ -15,12 +15,14 @@ mod config;
 mod error;
 mod event;
 mod gathered;
+mod sample_reader;
 mod samples;
 
 pub use config::DemuxerConfig;
 pub use error::Error;
 pub use event::{Event, Sample};
 use gathered::Gathered;
+use sample_reader::SampleReader;
 use samples::Samples;
 
 /// Length of the `imda_identifier` that starts the payload of an `imda`, ISO/IEC 14496-12 §8.1.4.2
@@ -30,8 +32,8 @@ const IMDA_IDENTIFIER_LENGTH: u64 = 4;
 #[derive(Debug, Clone)]
 enum Pending {
     Ready(Event<'static>),
-    /// A sample whose bytes are in [`Samples::bytes`]
-    Sample(SampleLocation),
+    /// The event the sample reader holds
+    Sample,
 }
 
 /// Where the demuxer is in the file
@@ -39,10 +41,8 @@ enum Pending {
 enum State {
     /// No `moov` was read
     NoMovie,
-    /// The `moov` was read, and no sample is being gathered
+    /// The `moov` was read
     Movie,
-    /// The bytes of the sample at `index` of the locations are being gathered
-    Gathering { index: usize },
 }
 
 /// What the demuxer holds, in its state, that decides its next step
@@ -51,17 +51,11 @@ enum Observation {
     Unreported(SampleLocation),
     /// The next sample of a subscribed track wanted, at this index of the
     /// locations
-    Wanted(usize),
-    /// The next sample wanted, larger than the limit
-    OverLimit(usize, SampleLocation),
-    /// The next sample wanted, of no bytes
-    Empty(usize, SampleLocation),
-    /// Every byte of the sample being gathered is in hand
-    SampleInHand(SampleLocation),
-    /// The input ended inside the sample being gathered
-    Truncated(usize, SampleLocation),
-    /// The input ended before a byte of the sample wanted was taken
-    Abandoned,
+    Wanted(usize, SampleLocation),
+    /// An event the sample reader holds
+    SampleEvent,
+    /// The sample reader is gathering a sample
+    Gathering,
     /// A box the box reader reported
     Box(BoxRead),
     /// Nothing without more input
@@ -76,14 +70,6 @@ enum Step {
     Output(Pending),
     /// Wait for input
     NeedMoreData,
-}
-
-/// How much of the input the state takes next
-enum Take {
-    /// Up to this many bytes, the rest of the sample being gathered
-    Sample(u64),
-    /// What the box reader takes
-    Boxes,
 }
 
 /// A box the box reader reported, read into its value where the demuxer reads one
@@ -136,7 +122,10 @@ enum Refused {
 /// declares it and that `imda` are read, in whichever order the file holds
 /// them; one whose `imda` the file lacks is reported once the input ends. A
 /// caller that cannot seek locates the samples of an `imda` that comes
-/// before the box that declares them, and is not lent them.
+/// before the box that declares them, and is not lent them. A sample whose
+/// data reference names another file, §8.7.2, is located and not lent, nor
+/// are bytes requested for it: a caller takes its bytes from that file, at
+/// the offset and of the size the location gives.
 /// Handing input over never fails: what cannot be read, such as a `moof`
 /// before any `moov`, is reported as [`Event::Error`]. What the reading of
 /// the specification refuses, the demuxer reads lossily once the
@@ -189,10 +178,12 @@ pub struct Demuxer {
     boxes: BoxReader,
     structure_data: StructureDataReader,
     sample_count_limit: u64,
-    sample_size_limit: u64,
     random_access_entry_limit: u64,
     state: State,
     samples: Samples,
+    /// Reader of the bytes of the sample of a subscribed track being
+    /// gathered, which [`Samples`] picks and hands over one at a time
+    sample_reader: SampleReader,
     pending: Option<Pending>,
     // Why hold the box refused rather than read it lossily at once:
     // its error is reported first, and one event is held at a time.
@@ -220,10 +211,10 @@ impl Demuxer {
                 config.identified_media_data_limit,
             ),
             sample_count_limit: config.sample_count_limit,
-            sample_size_limit: config.sample_size_limit,
             random_access_entry_limit: config.random_access_entry_limit,
             state: State::NoMovie,
             samples: Samples::default(),
+            sample_reader: SampleReader::new(config.sample_size_limit),
             pending: None,
             refused: None,
             finished: false,
@@ -238,14 +229,7 @@ impl Demuxer {
     /// Stops lending the bytes of the samples of track `track_id`, dropping those of one being gathered
     pub fn unsubscribe_track(&mut self, track_id: u32) {
         self.samples.unsubscribe(track_id);
-        if let State::Gathering { index } = self.state
-            && self
-                .samples
-                .location(index)
-                .is_some_and(|location| location.properties.track_id == track_id)
-        {
-            self.state = State::Movie;
-        }
+        self.sample_reader.drop_track(track_id);
     }
 
     /// Returns where the demuxer wants input next, or `None` once it wants none
@@ -257,21 +241,22 @@ impl Demuxer {
         if self.finished {
             return None;
         }
+        if let Some(required) = self.sample_reader.required_input() {
+            return Some(required);
+        }
         let boxes = self.boxes.required_input();
-        let (location, gathered) = match self.state {
-            State::Gathering { index } => (self.samples.location(index), self.samples.gathered()),
-            State::Movie => (
-                self.samples
-                    .target(boxes.map(|required| required.position))
-                    .map(|(_, location)| location),
-                0,
-            ),
-            State::NoMovie => (None, 0),
+        let target = match self.state {
+            State::Movie => self
+                .samples
+                .target(boxes.map(|required| required.position), |location| {
+                    Self::is_in_this_file(&self.structure_data, location)
+                }),
+            State::NoMovie => None,
         };
-        match location {
-            Some(location) => Some(RequiredInput {
-                position: location.offset.saturating_add(gathered),
-                length: Some(u64::from(location.size).saturating_sub(gathered)),
+        match target {
+            Some((_, location)) => Some(RequiredInput {
+                position: location.offset,
+                length: Some(u64::from(location.size)),
             }),
             None => boxes,
         }
@@ -304,17 +289,10 @@ impl Demuxer {
             "input starts at offset {position}, after the offset {} the demuxer requires",
             required.position
         );
-        match self.take() {
-            Take::Sample(remaining) => {
-                let ignored = usize::try_from(required.position.saturating_sub(position))
-                    .unwrap_or(usize::MAX);
-                let bytes = bytes.get(ignored..).unwrap_or_default();
-                let taken = bytes
-                    .get(..usize::try_from(remaining).unwrap_or(usize::MAX))
-                    .unwrap_or(bytes);
-                self.samples.gather(taken);
-            }
-            Take::Boxes => self.boxes.handle_input(position, bytes),
+        if self.sample_reader.has_sample() {
+            self.sample_reader.handle_input(position, bytes);
+        } else {
+            self.boxes.handle_input(position, bytes);
         }
         self.step();
     }
@@ -327,11 +305,7 @@ impl Demuxer {
         }
         Some(match self.pending.take()? {
             Pending::Ready(event) => event,
-            Pending::Sample(location) => Event::Sample(Sample {
-                properties: location.properties,
-                offset: location.offset,
-                bytes: self.samples.bytes(),
-            }),
+            Pending::Sample => self.sample_reader.poll_event()?,
         })
     }
 
@@ -344,15 +318,8 @@ impl Demuxer {
     /// handed over: a caller that cannot seek ends the input there.
     pub fn finish(&mut self) {
         self.finished = true;
+        self.sample_reader.finish();
         self.boxes.finish();
-    }
-
-    /// How much of the input the state takes next
-    fn take(&self) -> Take {
-        match self.state {
-            State::Gathering { index } => Take::Sample(self.samples.remaining(index)),
-            State::NoMovie | State::Movie => Take::Boxes,
-        }
     }
 
     /// What the demuxer holds, in its state, and what the box reader reported, that decides its next step
@@ -363,21 +330,16 @@ impl Demuxer {
         if let Some(read) = read {
             return Observation::Box(read);
         }
-        let samples = &self.samples;
-        if let Some(location) = samples.unreported() {
+        if let Some(location) = self.samples.unreported() {
             return Observation::Unreported(location);
         }
+        if self.sample_reader.has_event() {
+            return Observation::SampleEvent;
+        }
+        if self.sample_reader.has_sample() {
+            return Observation::Gathering;
+        }
         match self.state {
-            State::Gathering { index } => match samples.location(index) {
-                Some(location) if u64::from(location.size) == samples.gathered() => {
-                    Observation::SampleInHand(location)
-                }
-                Some(location) if self.finished && samples.gathered() > 0 => {
-                    Observation::Truncated(index, location)
-                }
-                Some(_) if self.finished => Observation::Abandoned,
-                Some(_) | None => Observation::NeedMoreData,
-            },
             // Why want no sample once the input ended: a caller that cannot
             // seek ends the input where the demuxer asks for bytes before
             // those it has read, and gets no error for the samples there.
@@ -386,14 +348,9 @@ impl Demuxer {
                 self.boxes
                     .required_input()
                     .map(|required| required.position),
+                |location| Self::is_in_this_file(&self.structure_data, location),
             ) {
-                Some((index, location)) if u64::from(location.size) > self.sample_size_limit => {
-                    Observation::OverLimit(index, location)
-                }
-                Some((index, location)) if location.size == 0 => {
-                    Observation::Empty(index, location)
-                }
-                Some((index, _)) => Observation::Wanted(index),
+                Some((index, location)) => Observation::Wanted(index, location),
                 None => Observation::NeedMoreData,
             },
             State::NoMovie => Observation::NeedMoreData,
@@ -406,14 +363,16 @@ impl Demuxer {
             // Why ask the box reader first: a box it reported comes before the
             // samples it lets the demuxer request, such as an `mdat` before
             // the samples in it.
-            let read = match self.state {
-                State::NoMovie | State::Movie if self.samples.is_reported() => {
-                    match self.refused.take() {
-                        Some(refused) => Some(BoxRead::Held(refused)),
-                        None => self.read_box(),
-                    }
+            let read = if self.samples.is_reported()
+                && !self.sample_reader.has_sample()
+                && !self.sample_reader.has_event()
+            {
+                match self.refused.take() {
+                    Some(refused) => Some(BoxRead::Held(refused)),
+                    None => self.read_box(),
                 }
-                State::NoMovie | State::Movie | State::Gathering { .. } => None,
+            } else {
+                None
             };
             let (next_state, step) = match (self.state, self.observe(read)) {
                 (state, Observation::Unreported(location)) => {
@@ -423,40 +382,12 @@ impl Demuxer {
                         Step::Output(Pending::Ready(Event::SampleLocation(location))),
                     )
                 }
-                (State::Movie, Observation::Wanted(index)) => {
-                    self.samples.clear_bytes();
-                    (State::Gathering { index }, Step::Continue)
-                }
-                (state, Observation::OverLimit(index, location)) => {
+                (State::Movie, Observation::Wanted(index, location)) => {
                     self.samples.pass(index);
-                    (
-                        state,
-                        Step::Output(Pending::Ready(Event::Error(Error::SampleOverLimit {
-                            location,
-                            limit: self.sample_size_limit,
-                        }))),
-                    )
+                    self.sample_reader.handle_location(location);
+                    (State::Movie, Step::Continue)
                 }
-                (state, Observation::Empty(index, location)) => {
-                    self.samples.clear_bytes();
-                    self.samples.pass(index);
-                    (state, Step::Output(Pending::Sample(location)))
-                }
-                (State::Gathering { index }, Observation::SampleInHand(location)) => {
-                    self.samples.pass(index);
-                    (State::Movie, Step::Output(Pending::Sample(location)))
-                }
-                (_, Observation::Abandoned) => (State::Movie, Step::Continue),
-                (_, Observation::Truncated(index, location)) => {
-                    self.samples.clear_bytes();
-                    self.samples.pass(index);
-                    (
-                        State::Movie,
-                        Step::Output(Pending::Ready(Event::Error(Error::TruncatedSample {
-                            location,
-                        }))),
-                    )
-                }
+                (state, Observation::SampleEvent) => (state, Step::Output(Pending::Sample)),
                 (_, Observation::Box(BoxRead::Movie(movie))) => (
                     State::Movie,
                     Step::Output(Pending::Ready(Event::Movie(movie))),
@@ -474,41 +405,40 @@ impl Demuxer {
                 // those are is kept, and reading again stops at the same
                 // check, most before any sample is resolved.
                 (state, Observation::Box(BoxRead::Held(Refused::Movie(movie)))) => {
-                    match self.structure_data.handle_movie_lossy(&movie) {
-                        Ok(locations) => {
-                            self.samples.replace(locations);
-                            (
-                                State::Movie,
-                                Step::Output(Pending::Ready(Event::Movie(movie))),
-                            )
-                        }
+                    let resolved = self
+                        .structure_data
+                        .handle_movie_lossy(&movie)
+                        .map(|locations| self.samples.replace(locations));
+                    match resolved {
+                        Ok(()) => (
+                            State::Movie,
+                            Step::Output(Pending::Ready(Event::Movie(movie))),
+                        ),
                         Err(_) => (state, Step::Continue),
                     }
                 }
                 (
                     state,
                     Observation::Box(BoxRead::Held(Refused::MovieFragment { offset, moof })),
-                ) => match self
-                    .structure_data
-                    .handle_movie_fragment_lossy(&moof, offset)
-                {
-                    Ok(locations) => {
-                        self.samples.extend(locations);
-                        (
+                ) => {
+                    let resolved = self
+                        .structure_data
+                        .handle_movie_fragment_lossy(&moof, offset)
+                        .map(|locations| self.samples.extend(locations));
+                    match resolved {
+                        Ok(()) => (
                             state,
                             Step::Output(Pending::Ready(Event::MovieFragment(moof))),
-                        )
+                        ),
+                        Err(_) => (state, Step::Continue),
                     }
-                    Err(_) => (state, Step::Continue),
-                },
+                }
                 (state, Observation::Box(BoxRead::Event(event))) => {
                     (state, Step::Output(Pending::Ready(event)))
                 }
                 (
                     state,
-                    Observation::NeedMoreData
-                    | Observation::Wanted(..)
-                    | Observation::SampleInHand(_),
+                    Observation::NeedMoreData | Observation::Wanted(..) | Observation::Gathering,
                 ) => (state, Step::NeedMoreData),
             };
             self.state = next_state;
@@ -521,6 +451,20 @@ impl Demuxer {
                 Step::NeedMoreData => return,
             }
         }
+    }
+
+    /// Whether the bytes of the sample at `location`, which `structure_data` resolved, lie in this file, where the demuxer requests them
+    fn is_in_this_file(structure_data: &StructureDataReader, location: &SampleLocation) -> bool {
+        // Why read an error as another file rather than report it: the
+        // structure-data checks the sample entry and the data reference entry
+        // of every location it returns as it resolves them, and refuses the
+        // box where it cannot, so no location it returned errs here.
+        structure_data
+            .is_in_this_file(
+                location.properties.track_id,
+                location.properties.sample_description_index,
+            )
+            .unwrap_or(false)
     }
 
     /// The next event of the box reader, read into the value of its box where the demuxer reads one
@@ -641,7 +585,10 @@ impl Demuxer {
                         sidx,
                     }),
                     Ok(Gathered::MovieFragment(moof)) => {
-                        self.samples.drop_before(offset);
+                        let structure_data = &self.structure_data;
+                        self.samples.drop_before(offset, |location| {
+                            Self::is_in_this_file(structure_data, location)
+                        });
                         // Why count before resolving: the samples of the
                         // fragments before may lie after this `moof` and
                         // stay held, and the decoding times move on only for
@@ -658,11 +605,12 @@ impl Demuxer {
                                 },
                             )))
                         } else {
-                            match self.structure_data.handle_movie_fragment(&moof, offset) {
-                                Ok(locations) => {
-                                    self.samples.extend(locations);
-                                    BoxRead::MovieFragment(moof)
-                                }
+                            let resolved = self
+                                .structure_data
+                                .handle_movie_fragment(&moof, offset)
+                                .map(|locations| self.samples.extend(locations));
+                            match resolved {
+                                Ok(()) => BoxRead::MovieFragment(moof),
                                 Err(error) => BoxRead::Refused {
                                     error: refused(error),
                                     refused: Refused::MovieFragment { offset, moof },
@@ -670,15 +618,16 @@ impl Demuxer {
                             }
                         }
                     }
-                    Ok(Gathered::Movie(movie)) => match self.structure_data.handle_movie(&movie) {
+                    Ok(Gathered::Movie(movie)) => match self
+                        .structure_data
+                        .handle_movie(&movie)
+                        .map(|locations| self.samples.replace(locations))
+                    {
                         Err(error) => BoxRead::Refused {
                             error: refused(error),
                             refused: Refused::Movie(movie),
                         },
-                        Ok(locations) => {
-                            self.samples.replace(locations);
-                            BoxRead::Movie(movie)
-                        }
+                        Ok(()) => BoxRead::Movie(movie),
                     },
                 }
             }

@@ -10,7 +10,7 @@ use isobmff_boxes::{
 use super::Error;
 use super::identified_media_data::{IdentifiedMediaData, Origin};
 use super::reader::Reading;
-use super::sample::{self, MediaData};
+use super::sample::{self, EntryDataReference, MediaData};
 use crate::{SampleLocation, SampleProperties};
 
 /// What a track of the `moov` gives the samples of its track fragments
@@ -21,7 +21,7 @@ pub(super) struct FragmentTrack {
     defaults: Option<TrackExtendsBox>,
     /// The `data_reference_index` of each sample entry of the track, from 1,
     /// and where it places the media data
-    entries: Vec<(u16, MediaData)>,
+    entries: Vec<EntryDataReference>,
     /// Decoding time of the next sample of the track: the sum of the
     /// `sample_duration`s of the samples before it, §8.8.12, or the `tfdt`
     /// of the last track fragment that gave one; `None` before any
@@ -46,6 +46,28 @@ impl FragmentTrack {
             entries: sample::entry_data_references(stsd, dref),
             next_decoding_time,
         }
+    }
+    /// `track_ID` of the track
+    pub(super) const fn track_id(&self) -> u32 {
+        self.track_id
+    }
+
+    /// Whether the samples of the sample entry `sample_description_index`, from 1, lie in the file of the `dref`, or in an `imda` of it
+    ///
+    /// # Errors
+    /// * [`Error::SampleDescriptionIndexOutOfRange`]: the track has no such
+    ///   sample entry.
+    /// * [`Error::InvalidEntry`]: the sample entry ends before its
+    ///   `data_reference_index`.
+    /// * [`Error::DataReferenceIndexOutOfRange`]: the sample entry names no
+    ///   data reference entry.
+    pub(super) fn is_in_this_file(&self, sample_description_index: u32) -> Result<bool, Error> {
+        let (_, media_data) =
+            sample::data_reference(&self.entries, self.track_id, sample_description_index)?;
+        Ok(match media_data {
+            MediaData::SameFile | MediaData::Identified(_) | MediaData::SequenceNumber => true,
+            MediaData::Elsewhere => false,
+        })
     }
 }
 
@@ -193,25 +215,15 @@ pub(super) fn resolve(
         // ends where it starts, so no origin is needed.
         let identified_media_data = if has_samples {
             let sample_description_index = sample_description_index.ok_or(missing)?;
-            let entry = usize::try_from(sample_description_index)
-                .ok()
-                .and_then(|index| index.checked_sub(1))
-                .and_then(|index| track.entries.get(index));
-            match entry {
-                Some(&(_, MediaData::SameFile)) => None,
-                Some(&(_, MediaData::Identified(imda_identifier))) => Some(imda_identifier),
-                Some(&(_, MediaData::SequenceNumber)) => Some(moof.mfhd.sequence_number),
-                Some(&(data_reference_index, MediaData::Elsewhere)) => {
-                    return Err(Error::MediaDataElsewhere {
-                        track_id,
-                        data_reference_index,
-                    });
-                }
-                None => {
-                    return Err(Error::SampleDescriptionIndexOutOfRange {
-                        sample_description_index,
-                    });
-                }
+            let (_, media_data) =
+                sample::data_reference(&track.entries, track_id, sample_description_index)?;
+            match media_data {
+                // Why a file offset for a sample in another file: Table 6
+                // counts its data from the base the `tfhd` gives in that file,
+                // or from where it counts that of any other.
+                MediaData::SameFile | MediaData::Elsewhere => None,
+                MediaData::Identified(imda_identifier) => Some(imda_identifier),
+                MediaData::SequenceNumber => Some(moof.mfhd.sequence_number),
             }
         } else {
             None

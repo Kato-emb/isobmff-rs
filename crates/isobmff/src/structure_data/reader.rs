@@ -26,7 +26,9 @@ pub(super) enum Reading {
 /// [`handle_movie`](Self::handle_movie) takes a `moov` and returns the
 /// [`SampleLocation`] of each sample of its tracks, in the order of their file
 /// offsets. It refuses a sample table whose tables count different numbers of
-/// samples, or a track whose samples lie in another file.
+/// samples. A sample whose data reference entry names another file is
+/// returned at its offset in that file, ISO/IEC 14496-12 §8.7.5.1;
+/// [`is_in_this_file`](Self::is_in_this_file) tells it from one of this file.
 /// [`handle_movie_fragment`](Self::handle_movie_fragment) then takes each
 /// `moof` that follows and returns the samples it adds, ISO/IEC 14496-12
 /// §8.8: their decoding times go on from those of the samples before them in
@@ -120,12 +122,13 @@ impl StructureDataReader {
     ///   anything is allocated for them.
     /// * [`Error::MissingTable`], [`Error::SampleCountMismatch`],
     ///   [`Error::InvalidEntry`]: the sample table of a track lacks a table it
-    ///   needs, or its tables disagree, such as a table that counts another
+    ///   needs, a sample entry ends before its `data_reference_index`, or its
+    ///   tables disagree, such as a table that counts another
     ///   number of samples than the sample size table, §8.7.3, or a sync
     ///   sample table not in strictly increasing order of sample number,
     ///   §8.6.2.
-    /// * [`Error::MediaDataElsewhere`]: the samples of a track lie in another
-    ///   file.
+    /// * [`Error::DataReferenceIndexOutOfRange`]: the sample entry of the
+    ///   samples of a track names no data reference entry, §8.5.2.3.
     /// * [`Error::SequenceNumberOutsideMovieFragment`]: the samples of a track
     ///   lie in the `imda` the sequence number of a movie fragment names.
     /// * [`Error::Overflow`]: a sample lies past the last file offset or
@@ -272,7 +275,10 @@ impl StructureDataReader {
     ///   does not have.
     /// * [`Error::MissingDefault`]: a sample takes a value neither the `tfhd`
     ///   nor a `trex` gives.
-    /// * [`Error::MediaDataElsewhere`]: a sample lies in another file.
+    /// * [`Error::InvalidEntry`]: the sample entry of a sample ends before its
+    ///   `data_reference_index`.
+    /// * [`Error::DataReferenceIndexOutOfRange`]: the sample entry of a sample
+    ///   names no data reference entry, §8.5.2.3.
     /// * [`Error::SampleDescriptionIndexOutOfRange`]: a sample names a sample
     ///   entry its track does not have.
     /// * [`Error::DecodingTimeMismatch`]: the `tfdt` of a track fragment is
@@ -465,6 +471,47 @@ impl StructureDataReader {
             .handle(imda_identifier, payload_offset, &mut self.locations)?;
         self.locations.sort_by_key(|location| location.offset);
         Ok(self.locations.drain(..))
+    }
+
+    /// Returns whether the samples of the sample entry `sample_description_index`, from 1, of track `track_id` lie in the file of the `dref` (ISO/IEC 14496-12 §8.7.2.3) or in an `imda` of that file (§8.7.2.1)
+    ///
+    /// The samples of any other data reference entry lie in the file it
+    /// names, at offsets of that file, §8.7.5.1. Unlike
+    /// [`DataEntry::is_in_same_file`](isobmff_boxes::DataEntry::is_in_same_file),
+    /// an `imda` of the file counts as this file. The track and its sample
+    /// entries are those of the `moov` taken.
+    ///
+    /// # Errors
+    /// * [`Error::UnknownTrack`]: no `moov` was taken, or it has no track
+    ///   `track_id`.
+    /// * [`Error::SampleDescriptionIndexOutOfRange`]: the track has no such
+    ///   sample entry.
+    /// * [`Error::InvalidEntry`]: the sample entry ends before its
+    ///   `data_reference_index`.
+    /// * [`Error::DataReferenceIndexOutOfRange`]: the sample entry names no
+    ///   data reference entry.
+    ///
+    /// ```
+    /// use isobmff::structure_data::{Error, StructureDataReader};
+    /// use isobmff_boxes::MovieBox;
+    ///
+    /// // A movie of no track says nothing of track 1
+    /// let mut reader = StructureDataReader::new(1024, 16);
+    /// let _ = reader.handle_movie(&MovieBox::default())?.count();
+    /// assert_eq!(reader.is_in_this_file(1, 1), Err(Error::UnknownTrack { track_id: 1 }));
+    /// # Ok::<(), Error>(())
+    /// ```
+    pub fn is_in_this_file(
+        &self,
+        track_id: u32,
+        sample_description_index: u32,
+    ) -> Result<bool, Error> {
+        self.tracks
+            .iter()
+            .flatten()
+            .find(|track| track.track_id() == track_id)
+            .ok_or(Error::UnknownTrack { track_id })?
+            .is_in_this_file(sample_description_index)
     }
 
     /// Ends the input, refusing the samples that wait for an `imda` it never held

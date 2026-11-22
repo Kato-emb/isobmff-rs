@@ -14,7 +14,10 @@ mod tests {
     use isobmff_test_support::serde_json::Value;
     use isobmff_test_support::{conformance_files, ffprobe, ffprobe_packets, gpac_list};
 
-    use crate::support::{Read, mp4_file_type, one_sample_entry_track, packet_read, read, sample};
+    use crate::support::{
+        Read, has_tracks_in_other_files, mp4_file_type, one_sample_entry_track, packet_read, read,
+        sample,
+    };
 
     /// An entry of a `tfra`: its `track_ID`, `time`, `moof_offset`, `traf_number`, `trun_number` and `sample_delta`
     type Entry = (u32, u64, u64, u32, u32, u32);
@@ -349,8 +352,9 @@ mod tests {
             };
             // Why only fragmented sources without errors or gaps: their
             // samples are written in movie fragments as they are, a file the
-            // demuxer reports an error in has none to write, and the
-            // fragmented muxer refuses a gap in decoding times.
+            // demuxer reports an error in has none to write, the muxers write
+            // the samples of one file alone, and the fragmented muxer refuses
+            // a gap in decoding times.
             let mut next = std::collections::BTreeMap::new();
             let gap = source.samples.iter().any(|(properties, _)| {
                 let end = properties.decoding_time + u64::from(properties.sample_duration);
@@ -360,6 +364,7 @@ mod tests {
             if source.movie.mvex.is_none()
                 || !source.errors.is_empty()
                 || source.samples.is_empty()
+                || has_tracks_in_other_files(&source.movie)
                 || gap
             {
                 continue;

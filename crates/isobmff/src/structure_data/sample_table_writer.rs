@@ -4,7 +4,7 @@ use alloc::vec::Vec;
 use core::num::NonZeroU32;
 
 use super::Error;
-use super::sample::{self, MediaData, Sample, TrackSampleDescription};
+use super::sample::{self, EntryDataReference, Sample, TrackSampleDescription};
 use crate::SampleLocation;
 use isobmff_boxes::{
     ChunkLargeOffsetBox, ChunkOffsetBox, ChunkOffsetVariant, CompositionOffsetBox,
@@ -101,7 +101,7 @@ pub struct SampleTableWriter {
     stsd: SampleDescriptionBox,
     /// The `data_reference_index` of each sample entry, and where it places
     /// the media data
-    entries: Vec<(u16, MediaData)>,
+    entries: Vec<EntryDataReference>,
     sample_count_limit: u64,
     // Why keep each sample rather than the tables as they grow: a chunk ends
     // where the next sample does not follow the last, and the end of the
@@ -148,7 +148,9 @@ impl SampleTableWriter {
     /// * [`Error::SampleDescriptionIndexOutOfRange`]: the sample names no
     ///   sample entry of the track.
     /// * [`Error::MediaDataElsewhere`]: the sample entry places the media data
-    ///   in another file, or under no data reference entry.
+    ///   in another file, or in an `IdentifiedMediaDataBox`.
+    /// * [`Error::DataReferenceIndexOutOfRange`]: the sample entry names no
+    ///   data reference entry.
     /// * [`Error::Overflow`]: the bytes of the sample lie past the last
     ///   offset a file can have, or the decoding time after it past the last
     ///   a track can have.
