@@ -67,13 +67,21 @@ impl Samples {
         self.locations.extend(locations);
     }
 
-    /// Drops the locations of the samples lent, or before the `moof` at file offset `offset`, and counts those left as reported
-    pub(super) fn drop_before(&mut self, offset: u64) {
+    /// Drops the locations of the samples lent, before the `moof` at file offset `offset`, or not in this file as `is_in_this_file` tells, and counts those left as reported
+    pub(super) fn drop_before(
+        &mut self,
+        offset: u64,
+        is_in_this_file: impl Fn(&SampleLocation) -> bool,
+    ) {
         // Why drop the locations before the `moof`: a sample of a subscribed
         // track before it was lent before the box reader passed it, and the
         // locations would otherwise grow with every fragment.
+        // Why drop those in another file whatever their offset: their offset
+        // is one of that file, not comparable with the `moof`'s, and their
+        // bytes are never requested once their locations are reported.
         self.locations.drain(..self.next);
-        self.locations.retain(|location| location.offset >= offset);
+        self.locations
+            .retain(|location| location.offset >= offset && is_in_this_file(location));
         self.next = 0;
         self.reported = self.locations.len();
     }

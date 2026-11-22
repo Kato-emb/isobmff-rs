@@ -876,6 +876,96 @@ mod tests {
         );
     }
 
+    /// `external_fragments.mp4`, whose movie fragments declare 24, 23 and 23 samples, under a limit above any one fragment and below all of them
+    #[test]
+    fn the_locations_of_samples_in_another_file_count_toward_no_movie_fragment_after_them() {
+        let file = include_bytes!("fixtures/external_fragments.mp4");
+        let mut limited = DemuxerConfig::default();
+        limited.sample_count_limit = 30;
+        let reported = read_every_way("external_fragments.mp4", file, limited, Subscribe::Every);
+        let errors: Vec<_> = reported
+            .iter()
+            .filter(|reported| matches!(reported, Reported::Error(_)))
+            .collect();
+        assert_eq!(
+            (errors, locations(&reported).len()),
+            (Vec::<&Reported>::new(), 70)
+        );
+    }
+
+    /// A fragmented movie file of 8 movie fragments, each of one sample of track 1, in the `mdat` after it, and one of track 2, whose media data is in another file at offsets past the end of this one, read under a limit of 4 locations
+    #[test]
+    fn the_samples_of_a_track_in_this_file_are_lent_from_every_movie_fragment_beside_a_track_in_another_file()
+     {
+        use isobmff_boxes::{
+            MovieExtendsBox, MovieFragmentBox, TrackExtendsBox, TrackFragmentBox, TrackRunBox,
+            TrackRunSamples,
+        };
+        use isobmff_test_support::fixtures::{encoded, in_another_file, movie, track, written};
+
+        let mut movie = movie([
+            track(1, 20, &[], &[], &[]),
+            in_another_file(track(2, 20, &[], &[], &[])),
+        ]);
+        let trex = |track_id| {
+            let mut trex = TrackExtendsBox::default();
+            trex.track_id = track_id;
+            trex.default_sample_description_index = 1;
+            trex.default_sample_duration = 20;
+            trex.default_sample_size = 4;
+            trex
+        };
+        let mut mvex = MovieExtendsBox::default();
+        mvex.trex = Vec::from([trex(1), trex(2)]);
+        movie.mvex = Some(mvex);
+        movie.mvhd.next_track_id = 3;
+        let moof = |sequence_number, here: u64, elsewhere: u64| {
+            let traf = |track_id, base_data_offset| {
+                let mut traf = TrackFragmentBox::default();
+                traf.tfhd.track_id = track_id;
+                traf.tfhd.base_data_offset = Some(base_data_offset);
+                let mut trun = TrackRunBox::default();
+                trun.samples = TrackRunSamples::EmptyRows { sample_count: 1 };
+                traf.trun = Vec::from([trun]);
+                traf
+            };
+            let mut moof = MovieFragmentBox::default();
+            moof.mfhd.sequence_number = sequence_number;
+            moof.traf = Vec::from([traf(1, here), traf(2, elsewhere)]);
+            encoded(&moof)
+        };
+        let moof_length = u64::try_from(moof(1, 0, 0).len()).unwrap();
+        let mut file = encoded(&movie);
+        for index in 0..8_u8 {
+            let here = u64::try_from(file.len()).unwrap() + moof_length + 8;
+            file.extend(moof(
+                u32::from(index) + 1,
+                here,
+                (1 << 32) + u64::from(index) * 4,
+            ));
+            file.extend(written(b"mdat", &[&[index; 4]]));
+        }
+        let mut limited = DemuxerConfig::default();
+        limited.sample_count_limit = 4;
+        let reported = read_every_way("two tracks", &file, limited, Subscribe::Every);
+        let errors: Vec<_> = reported
+            .iter()
+            .filter(|reported| matches!(reported, Reported::Error(_)))
+            .collect();
+        let lent: Vec<Vec<u8>> = samples_by_track(&reported)
+            .into_iter()
+            .map(|(_, bytes)| bytes)
+            .collect();
+        assert_eq!(
+            (errors, locations(&reported).len(), lent),
+            (
+                Vec::<&Reported>::new(),
+                16,
+                (0..8_u8).map(|index| vec![index; 4]).collect()
+            )
+        );
+    }
+
     #[test]
     fn an_imda_too_short_for_its_identifier_is_reported() {
         let file = isobmff_test_support::fixtures::written(b"imda", &[b"\0\x07"]);

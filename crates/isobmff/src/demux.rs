@@ -249,7 +249,7 @@ impl Demuxer {
             State::Movie => self
                 .samples
                 .target(boxes.map(|required| required.position), |location| {
-                    self.is_in_this_file(location)
+                    Self::is_in_this_file(&self.structure_data, location)
                 }),
             State::NoMovie => None,
         };
@@ -348,7 +348,7 @@ impl Demuxer {
                 self.boxes
                     .required_input()
                     .map(|required| required.position),
-                |location| self.is_in_this_file(location),
+                |location| Self::is_in_this_file(&self.structure_data, location),
             ) {
                 Some((index, location)) => Observation::Wanted(index, location),
                 None => Observation::NeedMoreData,
@@ -453,13 +453,13 @@ impl Demuxer {
         }
     }
 
-    /// Whether the bytes of the sample at `location` lie in this file, where the demuxer requests them
-    fn is_in_this_file(&self, location: &SampleLocation) -> bool {
+    /// Whether the bytes of the sample at `location`, which `structure_data` resolved, lie in this file, where the demuxer requests them
+    fn is_in_this_file(structure_data: &StructureDataReader, location: &SampleLocation) -> bool {
         // Why read an error as another file rather than report it: the
         // structure-data checks the sample entry and the data reference entry
         // of every location it returns as it resolves them, and refuses the
         // box where it cannot, so no location it returned errs here.
-        self.structure_data
+        structure_data
             .is_in_this_file(
                 location.properties.track_id,
                 location.properties.sample_description_index,
@@ -585,7 +585,10 @@ impl Demuxer {
                         sidx,
                     }),
                     Ok(Gathered::MovieFragment(moof)) => {
-                        self.samples.drop_before(offset);
+                        let structure_data = &self.structure_data;
+                        self.samples.drop_before(offset, |location| {
+                            Self::is_in_this_file(structure_data, location)
+                        });
                         // Why count before resolving: the samples of the
                         // fragments before may lie after this `moof` and
                         // stay held, and the decoding times move on only for
