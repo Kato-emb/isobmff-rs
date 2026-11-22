@@ -4,7 +4,7 @@
 mod tests {
     use std::ops::Range;
 
-    use isobmff::framing::{BoxReader, Error, Event, FramerConfig, FrontPart};
+    use isobmff::file_level::{BoxReader, BoxReaderConfig, Error, Event, FrontPart};
     use isobmff_core::{BoxHeader, BoxType};
     use isobmff_test_support::fixtures::written;
     use isobmff_test_support::{
@@ -35,7 +35,7 @@ mod tests {
             offset: u64,
             header: BoxHeader,
         },
-        Gathered {
+        BoxPayload {
             offset: u64,
             box_type: BoxType,
             payload_offset: u64,
@@ -53,12 +53,12 @@ mod tests {
 
     impl Reported {
         /// The type, file offset and total of the box a box event reports
-        fn frame(&self, file: &[u8]) -> Option<(BoxType, u64, u64)> {
+        fn byte_range(&self, file: &[u8]) -> Option<(BoxType, u64, u64)> {
             match self {
                 Self::Box { offset, header } | Self::FrontPart { offset, header, .. } => {
                     Some((header.box_type(), *offset, total(*offset, *header, file)))
                 }
-                Self::Gathered {
+                Self::BoxPayload {
                     offset,
                     box_type,
                     payload_offset,
@@ -79,12 +79,12 @@ mod tests {
         while let Some(event) = reader.poll_event() {
             reported.push(match event {
                 Event::Box { offset, header } => Reported::Box { offset, header },
-                Event::Gathered {
+                Event::BoxPayload {
                     offset,
                     box_type,
                     payload_offset,
                     payload,
-                } => Reported::Gathered {
+                } => Reported::BoxPayload {
                     offset,
                     box_type,
                     payload_offset,
@@ -125,7 +125,7 @@ mod tests {
     }
 
     /// Reads `file` handed over from its start in pieces of `piece` bytes, as a caller that cannot seek does
-    fn read_in_pieces(file: &[u8], config: &FramerConfig, piece: usize) -> Vec<Reported> {
+    fn read_in_pieces(file: &[u8], config: &BoxReaderConfig, piece: usize) -> Vec<Reported> {
         let mut reader = BoxReader::new(config.clone());
         let mut reported = Vec::new();
         for (index, bytes) in file.chunks(piece).enumerate() {
@@ -140,7 +140,7 @@ mod tests {
     /// Reads `file` where the reader asks, as a caller that seeks does, and returns what it read with the ranges it handed over
     fn read_where_required(
         file: &[u8],
-        config: &FramerConfig,
+        config: &BoxReaderConfig,
     ) -> (Vec<Reported>, Vec<Range<usize>>) {
         let mut reader = BoxReader::new(config.clone());
         let (mut reported, mut handed) = (Vec::new(), Vec::new());
@@ -165,7 +165,7 @@ mod tests {
     }
 
     /// The events of `file`, the same however it is handed over
-    fn read_every_way(name: &str, file: &[u8], config: &FramerConfig) -> Vec<Reported> {
+    fn read_every_way(name: &str, file: &[u8], config: &BoxReaderConfig) -> Vec<Reported> {
         let whole = read_in_pieces(file, config, file.len().max(1));
         assert_eq!(
             read_in_pieces(file, config, 1),
@@ -197,10 +197,10 @@ mod tests {
     #[test]
     fn a_file_reads_as_the_same_boxes_however_its_bytes_are_cut() {
         for (name, file) in FIXTURES {
-            let reported = read_every_way(name, file, &FramerConfig::new(PAYLOAD_LIMIT));
+            let reported = read_every_way(name, file, &BoxReaderConfig::new(PAYLOAD_LIMIT));
             let covered = reported
                 .iter()
-                .map(|reported| reported.frame(file).map(|(_, _, total)| total))
+                .map(|reported| reported.byte_range(file).map(|(_, _, total)| total))
                 .sum::<Option<u64>>();
             assert_eq!(
                 covered,
@@ -210,7 +210,7 @@ mod tests {
         }
     }
 
-    /// The type of each box of `reported`, with whether its payload was gathered
+    /// The type of each box of `reported`, with whether its payload was read
     fn layout(reported: &[Reported]) -> Vec<(String, bool)> {
         reported
             .iter()
@@ -218,7 +218,7 @@ mod tests {
                 Reported::Box { header, .. } | Reported::FrontPart { header, .. } => {
                     (header.box_type().to_string(), false)
                 }
-                Reported::Gathered { box_type, .. } => (box_type.to_string(), true),
+                Reported::BoxPayload { box_type, .. } => (box_type.to_string(), true),
                 Reported::Error(error) => (error.to_string(), false),
                 Reported::Other(other) => (other.clone(), false),
             })
@@ -226,27 +226,27 @@ mod tests {
     }
 
     #[test]
-    fn the_fixtures_frame_as_the_boxes_ffmpeg_lays_out() {
-        let config = FramerConfig::new(PAYLOAD_LIMIT);
-        let gathered = |box_type: &str| (box_type.to_owned(), true);
+    fn the_fixtures_read_as_the_boxes_ffmpeg_lays_out() {
+        let config = BoxReaderConfig::new(PAYLOAD_LIMIT);
+        let payload_read = |box_type: &str| (box_type.to_owned(), true);
         let skipped = |box_type: &str| (box_type.to_owned(), false);
-        let fragment = [gathered("moof"), skipped("mdat")];
-        let segment = [gathered("styp"), gathered("moof"), skipped("mdat")];
+        let fragment = [payload_read("moof"), skipped("mdat")];
+        let segment = [payload_read("styp"), payload_read("moof"), skipped("mdat")];
         let expected: [(&str, Vec<(String, bool)>); 4] = [
             (
                 "movie_moov_last.mp4",
                 vec![
-                    gathered("ftyp"),
+                    payload_read("ftyp"),
                     skipped("free"),
                     skipped("mdat"),
-                    gathered("moov"),
+                    payload_read("moov"),
                 ],
             ),
             (
                 "movie_moov_first.mp4",
                 vec![
-                    gathered("ftyp"),
-                    gathered("moov"),
+                    payload_read("ftyp"),
+                    payload_read("moov"),
                     skipped("free"),
                     skipped("mdat"),
                 ],
@@ -254,16 +254,16 @@ mod tests {
             (
                 "fragmented.mp4",
                 [
-                    vec![gathered("ftyp"), gathered("moov")],
+                    vec![payload_read("ftyp"), payload_read("moov")],
                     fragment.iter().cloned().cycle().take(6).collect(),
-                    vec![gathered("mfra")],
+                    vec![payload_read("mfra")],
                 ]
                 .concat(),
             ),
             (
                 "segment.mp4",
                 [
-                    vec![gathered("ftyp"), gathered("moov")],
+                    vec![payload_read("ftyp"), payload_read("moov")],
                     segment.iter().cloned().cycle().take(9).collect(),
                 ]
                 .concat(),
@@ -281,7 +281,7 @@ mod tests {
 
     #[test]
     fn the_events_across_boxes_that_cannot_be_read() {
-        let config = FramerConfig::new(16);
+        let config = BoxReaderConfig::new(16);
         let over_limit_then_malformed = [
             &compact_box(b"moov", 32)[..],
             &compact_box(b"moof", 8),
@@ -306,9 +306,9 @@ mod tests {
             let reported = read_cut_everywhere(bytes, &config);
             layout(&reported)
                 .into_iter()
-                .map(|(event, gathered)| {
-                    if gathered {
-                        format!("{event} gathered")
+                .map(|(event, payload_read)| {
+                    if payload_read {
+                        format!("{event} payload read")
                     } else {
                         event
                     }
@@ -323,7 +323,8 @@ mod tests {
     #[test]
     fn a_reader_that_seeks_reads_no_byte_of_a_box_it_skips() {
         for (name, file) in FIXTURES {
-            let (reported, handed) = read_where_required(file, &FramerConfig::new(PAYLOAD_LIMIT));
+            let (reported, handed) =
+                read_where_required(file, &BoxReaderConfig::new(PAYLOAD_LIMIT));
             let skipped = reported
                 .iter()
                 .filter_map(|reported| match reported {
@@ -333,7 +334,7 @@ mod tests {
                         let end = offset.checked_add(total(*offset, *header, file)).unwrap();
                         Some(usize::try_from(start).unwrap()..usize::try_from(end).unwrap())
                     }
-                    Reported::Gathered { .. } | Reported::Error(_) | Reported::Other(_) => None,
+                    Reported::BoxPayload { .. } | Reported::Error(_) | Reported::Other(_) => None,
                 })
                 .collect::<Vec<_>>();
             assert!(
@@ -360,7 +361,7 @@ mod tests {
     }
 
     /// The events of `bytes` handed over in two pieces cut at each position, and at none
-    fn read_cut_everywhere(bytes: &[u8], config: &FramerConfig) -> Vec<Reported> {
+    fn read_cut_everywhere(bytes: &[u8], config: &BoxReaderConfig) -> Vec<Reported> {
         let whole = read_in_pieces(bytes, config, bytes.len().max(1));
         for cut in 0..=bytes.len() {
             let mut reader = BoxReader::new(config.clone());
@@ -387,7 +388,7 @@ mod tests {
             &compact_box(b"moov", 4),
         ]
         .concat();
-        let reported = read_cut_everywhere(&bytes, &FramerConfig::new(PAYLOAD_LIMIT));
+        let reported = read_cut_everywhere(&bytes, &BoxReaderConfig::new(PAYLOAD_LIMIT));
         assert!(
             matches!(
                 reported.as_slice(),
@@ -401,15 +402,15 @@ mod tests {
     }
 
     #[test]
-    fn input_that_ends_inside_a_box_gathered_reports_it_truncated() {
-        let config = FramerConfig::new(PAYLOAD_LIMIT);
+    fn input_that_ends_inside_a_box_whose_payload_is_read_reports_it_truncated() {
+        let config = BoxReaderConfig::new(PAYLOAD_LIMIT);
         let header = |bytes: &[u8]| BoxHeader::decode(bytes).unwrap().0;
-        let gathered = compact_box(b"moov", 16);
+        let payload_read = compact_box(b"moov", 16);
         assert_eq!(
-            read_cut_everywhere(gathered.get(..20).unwrap(), &config),
+            read_cut_everywhere(payload_read.get(..20).unwrap(), &config),
             [Reported::Error(Error::TruncatedBox {
                 offset: 0,
-                header: header(&gathered)
+                header: header(&payload_read)
             })]
         );
         let skipped = compact_box(b"mdat", 16);
@@ -429,7 +430,7 @@ mod tests {
     #[test]
     fn a_payload_over_the_limit_is_skipped_and_reading_goes_on() {
         let bytes = [&compact_box(b"moov", 32)[..], &compact_box(b"moof", 8)].concat();
-        let reported = read_cut_everywhere(&bytes, &FramerConfig::new(16));
+        let reported = read_cut_everywhere(&bytes, &BoxReaderConfig::new(16));
         let header = BoxHeader::decode(&bytes).unwrap().0;
         assert_eq!(
             reported,
@@ -439,7 +440,7 @@ mod tests {
                     header,
                     limit: 16
                 }),
-                Reported::Gathered {
+                Reported::BoxPayload {
                     offset: 40,
                     box_type: BoxType::compact(*b"moof"),
                     payload_offset: 48,
@@ -449,9 +450,9 @@ mod tests {
         );
     }
 
-    /// Settings that gather the default structure-data, and the front part of `imda` of `length` bytes, under `payload_limit`
-    fn front_part_config(length: u64, payload_limit: u64) -> FramerConfig {
-        let mut config = FramerConfig::new(payload_limit);
+    /// Settings that read the payload of the default structure-data, and the front part of `imda` of `length` bytes, under `payload_limit`
+    fn front_part_config(length: u64, payload_limit: u64) -> BoxReaderConfig {
+        let mut config = BoxReaderConfig::new(payload_limit);
         config.front_part_box_types.push(FrontPart {
             box_type: BoxType::compact(*b"imda"),
             length,
@@ -460,7 +461,7 @@ mod tests {
     }
 
     #[test]
-    fn the_front_part_of_a_box_is_gathered_and_the_rest_of_it_skipped() {
+    fn the_front_part_of_a_box_is_read_and_the_rest_of_it_skipped() {
         let imda = written(b"imda", &[b"\0\0\0\x07", &[0xab; 32]]);
         let bytes = [&imda[..], &compact_box(b"moof", 8)].concat();
         let config = front_part_config(4, PAYLOAD_LIMIT);
@@ -473,7 +474,7 @@ mod tests {
                     header: BoxHeader::decode(&imda).unwrap().0,
                     front_part: b"\0\0\0\x07".to_vec(),
                 },
-                Reported::Gathered {
+                Reported::BoxPayload {
                     offset: 44,
                     box_type: BoxType::compact(*b"moof"),
                     payload_offset: 52,
@@ -492,7 +493,7 @@ mod tests {
     }
 
     #[test]
-    fn a_payload_shorter_than_the_front_part_is_gathered_whole() {
+    fn a_payload_shorter_than_the_front_part_is_read_whole() {
         let imda = written(b"imda", &[b"\0\x07"]);
         assert_eq!(
             read_cut_everywhere(&imda, &front_part_config(4, PAYLOAD_LIMIT)),
@@ -555,7 +556,7 @@ mod tests {
                     header: BoxHeader::decode(&imda).unwrap().0,
                     limit: 2
                 }),
-                Reported::Gathered {
+                Reported::BoxPayload {
                     offset: 44,
                     box_type: BoxType::compact(*b"moof"),
                     payload_offset: 52,
@@ -566,14 +567,14 @@ mod tests {
     }
 
     #[test]
-    fn a_payload_under_the_limit_is_gathered_whatever_follows_it() {
+    fn a_payload_under_the_limit_is_read_whatever_follows_it() {
         let bytes = [&compact_box(b"moov", 8)[..], &compact_box(b"mdat", 64)].concat();
-        let reported = read_cut_everywhere(&bytes, &FramerConfig::new(16));
+        let reported = read_cut_everywhere(&bytes, &BoxReaderConfig::new(16));
         assert!(
             matches!(
                 &reported[..],
                 [
-                    Reported::Gathered { offset: 0, .. },
+                    Reported::BoxPayload { offset: 0, .. },
                     Reported::Box { offset: 16, .. }
                 ]
             ),
@@ -583,13 +584,13 @@ mod tests {
 
     #[test]
     fn a_box_of_size_0_runs_to_the_end_of_the_input() {
-        let config = FramerConfig::new(PAYLOAD_LIMIT);
-        let gathered = [&compact_box(b"ftyp", 8)[..], b"\0\0\0\0moov", &[0xcd; 5]].concat();
-        let reported = read_cut_everywhere(&gathered, &config);
+        let config = BoxReaderConfig::new(PAYLOAD_LIMIT);
+        let payload_read = [&compact_box(b"ftyp", 8)[..], b"\0\0\0\0moov", &[0xcd; 5]].concat();
+        let reported = read_cut_everywhere(&payload_read, &config);
         assert!(
             matches!(
                 &reported[..],
-                [Reported::Gathered { offset: 0, .. }, Reported::Gathered { offset: 16, payload, .. }] if payload == &[0xcd; 5]
+                [Reported::BoxPayload { offset: 0, .. }, Reported::BoxPayload { offset: 16, payload, .. }] if payload == &[0xcd; 5]
             ),
             "{reported:?}"
         );
@@ -604,7 +605,7 @@ mod tests {
             "{reported:?}"
         );
 
-        let over_limit = read_cut_everywhere(&gathered, &FramerConfig::new(4));
+        let over_limit = read_cut_everywhere(&payload_read, &BoxReaderConfig::new(4));
         assert!(
             matches!(
                 &over_limit[..],
@@ -628,7 +629,7 @@ mod tests {
         .concat();
         let user = [&28_u32.to_be_bytes()[..], b"uuid", &[0x11; 16], &[0; 4]].concat();
         let bytes = [large.as_slice(), &user].concat();
-        let reported = read_cut_everywhere(&bytes, &FramerConfig::new(PAYLOAD_LIMIT));
+        let reported = read_cut_everywhere(&bytes, &BoxReaderConfig::new(PAYLOAD_LIMIT));
         assert_eq!(
             reported,
             [
@@ -651,14 +652,14 @@ mod tests {
     #[test]
     #[should_panic(expected = "after the offset")]
     fn input_that_starts_after_the_required_offset_is_a_bug_of_the_caller() {
-        let mut reader = BoxReader::new(FramerConfig::new(PAYLOAD_LIMIT));
+        let mut reader = BoxReader::new(BoxReaderConfig::new(PAYLOAD_LIMIT));
         reader.handle_input(1, b"\0\0\0\x08free");
     }
 
     #[test]
     #[should_panic(expected = "after finish")]
     fn input_after_finish_is_a_bug_of_the_caller() {
-        let mut reader = BoxReader::new(FramerConfig::new(PAYLOAD_LIMIT));
+        let mut reader = BoxReader::new(BoxReaderConfig::new(PAYLOAD_LIMIT));
         reader.finish();
         reader.handle_input(0, b"\0\0\0\x08free");
     }
@@ -671,23 +672,27 @@ mod tests {
             .into_iter()
             .chain(compressed_box_conformance_files())
         {
-            let reported =
-                read_every_way(&file.name, &file.bytes, &FramerConfig::new(PAYLOAD_LIMIT));
-            let ours = tally(reported.iter().filter_map(|reported| match reported {
-                Reported::Box { .. } | Reported::Gathered { .. } | Reported::FrontPart { .. } => {
-                    reported.frame(&file.bytes).map(|(box_type, _, total)| {
-                        (gpac_type(box_type.four_cc().as_bytes()), total)
-                    })
-                }
-                Reported::Error(error) => {
-                    differences.push(format!("{}: {error}", file.name));
-                    None
-                }
-                Reported::Other(other) => {
-                    differences.push(format!("{}: {other}", file.name));
-                    None
-                }
-            }));
+            let reported = read_every_way(
+                &file.name,
+                &file.bytes,
+                &BoxReaderConfig::new(PAYLOAD_LIMIT),
+            );
+            let ours =
+                tally(reported.iter().filter_map(|reported| match reported {
+                    Reported::Box { .. }
+                    | Reported::BoxPayload { .. }
+                    | Reported::FrontPart { .. } => reported.byte_range(&file.bytes).map(
+                        |(box_type, _, total)| (gpac_type(box_type.four_cc().as_bytes()), total),
+                    ),
+                    Reported::Error(error) => {
+                        differences.push(format!("{}: {error}", file.name));
+                        None
+                    }
+                    Reported::Other(other) => {
+                        differences.push(format!("{}: {other}", file.name));
+                        None
+                    }
+                }));
             let theirs = tally(
                 gpac_children(file.report.get("IsoMediaFile").unwrap())
                     .into_iter()

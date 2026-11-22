@@ -16,8 +16,8 @@ pub enum Error {
         /// Why the header does not read
         source: isobmff_core::Error,
     },
-    /// The payload of a box the reader gathers is longer than
-    /// [`FramerConfig::payload_limit`](super::FramerConfig::payload_limit);
+    /// A payload the reader reads is longer than
+    /// [`BoxReaderConfig::payload_limit`](super::BoxReaderConfig::payload_limit);
     /// the box is skipped, and reading goes on at the box after it
     PayloadOverLimit {
         /// File offset of the box
@@ -32,8 +32,8 @@ pub enum Error {
         /// File offset of the header
         offset: u64,
     },
-    /// The input ends inside the box the reader gathers at `offset`, before
-    /// the end its header declares
+    /// The input ends inside the box at `offset` whose payload the reader
+    /// reads, before the end its header declares
     TruncatedBox {
         /// File offset of the box
         offset: u64,

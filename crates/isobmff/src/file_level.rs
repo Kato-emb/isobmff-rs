@@ -1,7 +1,7 @@
-//! The boxes laid end to end in a file, read from bytes that arrive in pieces
+//! The boxes at `file level`, read from bytes that arrive in pieces
 //!
 //! [`BoxReader`] cuts each box at file level off the bytes of a file: it
-//! gathers the payload of a box whose type [`FramerConfig`] names, or the
+//! reads the payload of a box whose type [`BoxReaderConfig`] names, or the
 //! [`FrontPart`] of it, and skips the payload of any other without
 //! requesting it.
 //!
@@ -16,7 +16,7 @@ mod error;
 mod event;
 mod reader;
 
-pub use config::{FramerConfig, FrontPart};
+pub use config::{BoxReaderConfig, FrontPart};
 pub use error::Error;
 pub use event::Event;
 pub use reader::BoxReader;

@@ -10,20 +10,20 @@ use super::error::Error;
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Event<'a> {
-    /// A box the reader does not gather: its payload is not requested, and
-    /// reading goes on at the box after it
+    /// A box whose payload the reader does not read: the payload is not
+    /// requested, and reading goes on at the box after it
     Box {
         /// File offset of the box
         offset: u64,
         /// Header of the box
         header: BoxHeader,
     },
-    /// A box the reader gathered whole, its payload lent from the reader's
+    /// A box whose payload the reader read whole, lent from the reader's
     /// buffer
     ///
     /// The header is not carried: the box ends where its payload does, at
     /// `payload_offset` plus the length of `payload`.
-    Gathered {
+    BoxPayload {
         /// File offset of the box
         offset: u64,
         /// Type of the box
@@ -33,8 +33,8 @@ pub enum Event<'a> {
         /// Payload of the box
         payload: &'a [u8],
     },
-    /// A box the reader gathered the front part of, its first bytes lent
-    /// from the reader's buffer; the rest of its payload is not requested,
+    /// A box whose payload the reader read only the front part of, its
+    /// first bytes lent from the reader's buffer; the rest of its payload is not requested,
     /// and reading goes on at the box after it
     ///
     /// `front_part` holds the [`FrontPart::length`](super::FrontPart::length)

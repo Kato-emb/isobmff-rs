@@ -1,17 +1,16 @@
 //! Sans-IO reading and writing of ISO base media files (ISO/IEC 14496-12)
 //!
-//! [`framing`] reads the boxes laid end to end in a file from bytes that
-//! arrive in pieces. The boxes themselves are read and written with
-//! [`boxes`], and the header that frames a box, the values its fields carry
-//! and the traits a box implements, such as [`BoxDecode`] and [`BoxEncode`],
-//! are at the root of the crate. The [`Error`] at the root is that of reading
-//! and writing a box.
+//! [`file_level`] reads the boxes at `file level` from bytes that arrive in
+//! pieces. The boxes themselves are read and written with [`boxes`], and the
+//! header of a box, the values its fields carry and the traits a box
+//! implements, such as [`BoxDecode`] and [`BoxEncode`], are at the root of
+//! the crate. The [`Error`] at the root is that of reading and writing a box.
 
 #![no_std]
 
 extern crate alloc;
 
-pub mod framing;
+pub mod file_level;
 
 /// The boxes of ISO/IEC 14496-12, each read into a value and written back, from `isobmff-boxes`
 pub use isobmff_boxes as boxes;
