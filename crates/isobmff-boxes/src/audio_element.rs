@@ -421,6 +421,9 @@ mod tests {
     /// `aepr` of -6 dB to 6 dB by 0 dB
     const AEPR: &[u8] = b"\0\0\0\x18aepr\0\0\0\0\xc0\xc0\0\0\x40\xc0\0\0\0\0\0\0";
 
+    /// `aepr` of -6 dB to a greatest prominence that is not a number, `0xffffffff`, by 0 dB
+    const AEPR_NOT_A_NUMBER: &[u8] = b"\0\0\0\x18aepr\0\0\0\0\xc0\xc0\0\0\xff\xff\xff\xff\0\0\0\0";
+
     /// `elng` of `de`
     const ELNG: &[u8] = b"\0\0\0\x0felng\0\0\0\0de\0";
 
@@ -503,6 +506,12 @@ mod tests {
             ),
             (AEPP.to_vec(), AEPP_ELEVATION.to_vec(), AEPR.to_vec())
         );
+    }
+
+    #[test]
+    fn a_prominence_that_is_not_a_number_is_written_back_as_the_bits_read() {
+        let (read, _) = AudioElementProminenceInteractivity::decode(AEPR_NOT_A_NUMBER).unwrap();
+        assert_eq!(encoded(&read), AEPR_NOT_A_NUMBER);
     }
 
     #[test]
