@@ -10,7 +10,7 @@ use isobmff_core::BoxType;
 /// use isobmff::file_level::BoxReaderConfig;
 /// use isobmff_core::BoxType;
 ///
-/// // Read the payload of the `meta` at file level too, besides the structure-data
+/// // Read the payload of the `meta` at file level too, besides structure-data
 /// let mut config = BoxReaderConfig::new(16 * 1024 * 1024);
 /// config.payload_box_types.push(BoxType::compact(*b"meta"));
 /// ```
@@ -37,9 +37,9 @@ pub struct BoxReaderConfig {
 }
 
 impl BoxReaderConfig {
-    /// The box types whose payload the reader reads by default: those at file level that
-    /// hold structure-data, the declarations that describe the media data,
-    /// ISO/IEC 14496-12 A.3
+    /// The box types whose payload the reader reads by default: those at file
+    /// level that hold structure-data, the declarations that describe the
+    /// media data, ISO/IEC 14496-12 A.3
     ///
     /// `ftyp` (§5.2), `styp` (§8.14.2), `moov` (§8.2.1), `moof` (§8.8.4),
     /// `sidx` (§8.14.3) and `mfra` (§8.8.9). The media data (`mdat` and
@@ -55,7 +55,8 @@ impl BoxReaderConfig {
     ];
 
     /// Creates the settings that read the payload of
-    /// [`BoxReaderConfig::STRUCTURE_DATA`], each of at most `payload_limit` bytes
+    /// [`BoxReaderConfig::STRUCTURE_DATA`], each of at most `payload_limit`
+    /// bytes
     #[must_use]
     pub fn new(payload_limit: u64) -> Self {
         Self {

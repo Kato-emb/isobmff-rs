@@ -17,8 +17,8 @@ const COMPACT_HEADER_LENGTH: u64 = 8;
 enum State {
     /// A box header starts the unconsumed bytes
     Header,
-    /// The header of a box whose payload the reader reads was consumed; its payload
-    /// starts the unconsumed bytes
+    /// The header of a box whose payload the reader reads was consumed; its
+    /// payload starts the unconsumed bytes
     // Why hold the offset, though the cursor less the payload in hand and the
     // header gives it: Skipping cannot derive its own, with nothing in hand,
     // and both states keep the box in one shape.
@@ -131,7 +131,7 @@ struct Transition {
 /// the end of the piece.
 ///
 /// ```
-/// use isobmff::file_level::{BoxReader, Event, BoxReaderConfig};
+/// use isobmff::file_level::{BoxReader, BoxReaderConfig, Event};
 ///
 /// let file: &[u8] = include_bytes!("../../tests/fixtures/movie_moov_last.mp4");
 /// let mut reader = BoxReader::new(BoxReaderConfig::new(1024 * 1024));
@@ -324,11 +324,12 @@ impl BoxReader {
 
     /// Ends the input at the bytes handed over so far
     ///
-    /// The events that follow report a box whose payload the reader reads
-    /// that the input ends inside as [`Error::TruncatedBox`], and one whose `size` is 0, which
-    /// runs to the end of the file, as the bytes handed over hold it. A box
-    /// the reader skips is not reported truncated: it never requests the
-    /// payload of one, so it cannot tell whether the input holds it.
+    /// The events that follow report a box the input ends inside, where the
+    /// reader reads its payload, as [`Error::TruncatedBox`], and one whose
+    /// `size` is 0, which runs to the end of the file, as the bytes handed
+    /// over hold it. A box the reader skips is not reported truncated: it
+    /// never requests the payload of one, so it cannot tell whether the input
+    /// holds it.
     pub fn finish(&mut self) {
         self.input.finish();
         self.step();
