@@ -1,11 +1,15 @@
 //! Movies built from the fields of their boxes, which the tests of reading and writing them share
 
 use isobmff_boxes::{
-    ChunkLargeOffsetBox, ChunkOffsetBox, ChunkOffsetVariant, DataEntry, DataEntryUrlBox, MovieBox,
+    ChunkLargeOffsetBox, ChunkOffsetBox, ChunkOffsetVariant, DataEntry, DataEntrySeqNumImdaBox,
+    DataEntryUrlBox, DataReferenceBox, MovieBox, MovieExtendsBox, MovieFragmentBox,
     SampleDescription, SampleEntry, SampleSizeBox, SampleSizeVariant, SampleSizes,
     SampleToChunkBox, SampleToChunkEntry, TimeToSampleBox, TimeToSampleEntry, TrackBox,
+    TrackExtendsBox, TrackFragmentBox, TrackRunBox, TrackRunSamples,
 };
-use isobmff_core::{BoxDefinition, BoxEncode, Utf8String};
+use isobmff_core::{
+    BoxDefinition, BoxEncode, BoxHeader, BoxSize, BoxType, ExtendedSize, FourCc, Utf8String,
+};
 
 /// Returns the track `track_id` of the samples of `sizes`, each lasting `sample_delta`, laid in chunks at `chunk_offsets` by the runs `(first_chunk, samples_per_chunk)`
 ///
@@ -29,8 +33,7 @@ pub fn track(
     let mut trak = TrackBox::default();
     trak.tkhd.track_id = track_id;
     let stbl = &mut trak.mdia.minf.stbl;
-    let mut entry = SampleEntry::default();
-    entry.data_reference_index = 1;
+    let entry = SampleEntry::new(FourCc::new([0; 4]), 1, Vec::new());
     stbl.stsd.sample_descriptions = Vec::from([SampleDescription::Typed(entry)]);
     let mut stts = TimeToSampleBox::default();
     let mut run = TimeToSampleEntry::default();
@@ -86,6 +89,18 @@ pub fn in_another_file(mut trak: TrackBox) -> TrackBox {
     trak
 }
 
+/// Returns whether an entry of `dref` names another file for the media data, as a `url ` with a `location` or a `urn ` does, ISO/IEC 14496-12 §8.7.2.3
+///
+/// An entry of a type this crate does not read counts as naming another
+/// file, and an `imda` entry as this file, as
+/// [`DataEntry::is_in_this_file`] says.
+#[must_use]
+pub fn names_another_file(dref: &DataReferenceBox) -> bool {
+    dref.data_entries
+        .iter()
+        .any(|entry| !entry.is_in_this_file())
+}
+
 /// Returns `value` written as a box
 ///
 /// # Panics
@@ -100,6 +115,16 @@ pub fn encoded(value: &(impl BoxEncode + BoxDefinition)) -> Vec<u8> {
     let mut bytes = vec![0; usize::try_from(value.encoded_len()).unwrap()];
     value.encode(&mut bytes).unwrap();
     bytes
+}
+
+/// Returns the header of an `mdat` of `payload_length` bytes, 16 bytes with a `largesize`, or `None` where the box would be longer than 64 bits count
+#[must_use]
+pub fn media_data_header(payload_length: u64) -> Option<[u8; 16]> {
+    let size = ExtendedSize::new(payload_length.checked_add(16)?)?;
+    let header = BoxHeader::new(BoxType::compact(*b"mdat"), BoxSize::Extended(size))?;
+    let mut bytes = [0; 16];
+    header.encode(&mut bytes).ok()?;
+    Some(bytes)
 }
 
 /// Returns the box of `box_type` whose payload is `fields` laid end to end, under a 32-bit size
@@ -124,4 +149,166 @@ pub fn movie(tracks: impl IntoIterator<Item = TrackBox>) -> MovieBox {
     let mut movie = MovieBox::default();
     movie.trak = tracks.into_iter().collect();
     movie
+}
+
+/// Returns a movie file whose `count` movie fragments come before the samples they declare
+///
+/// The file holds track 1, whose `moov` declares no sample. Each of the
+/// `count` fragments that follow declares one sample, and every one of
+/// those samples lies in one `mdat` after the last fragment. One more
+/// fragment then follows, its sample in an `mdat` after it.
+///
+/// Each sample is 4 bytes lasting 20, its sample entry the first, as the
+/// `trex` of the track gives them. The fragments give no `tfdt`, so the
+/// decoding time of each sample is the sum of the durations of the samples
+/// resolved before it.
+///
+/// # Panics
+///
+/// * A length passes what a `u64` counts.
+#[must_use]
+#[expect(
+    clippy::unwrap_used,
+    reason = "a test of a file longer than a u64 counts fails"
+)]
+pub fn fragments_ahead_of_their_samples(count: usize) -> Vec<u8> {
+    let mut movie = movie([track(1, 20, &[], &[], &[])]);
+    let mut trex = TrackExtendsBox::default();
+    trex.track_id = 1;
+    trex.default_sample_description_index = 1;
+    trex.default_sample_duration = 20;
+    trex.default_sample_size = 4;
+    let mut mvex = MovieExtendsBox::default();
+    mvex.trex = Vec::from([trex]);
+    movie.mvex = Some(mvex);
+    movie.mvhd.next_track_id = 2;
+    let moof = |base_data_offset: u64| {
+        let mut traf = TrackFragmentBox::default();
+        traf.tfhd.track_id = 1;
+        traf.tfhd.base_data_offset = Some(base_data_offset);
+        let mut trun = TrackRunBox::default();
+        trun.samples = TrackRunSamples::EmptyRows { sample_count: 1 };
+        traf.trun = Vec::from([trun]);
+        let mut moof = MovieFragmentBox::default();
+        moof.traf = Vec::from([traf]);
+        encoded(&moof)
+    };
+    let length = |length: usize| u64::try_from(length).unwrap();
+    let moof_length = length(moof(0).len());
+    let samples_length = length(count).checked_mul(4).unwrap();
+    let mut file = encoded(&movie);
+    let first_sample = length(count)
+        .checked_mul(moof_length)
+        .and_then(|moofs| moofs.checked_add(length(file.len())))
+        .and_then(|end| end.checked_add(8))
+        .unwrap();
+    for index in 0..length(count) {
+        file.extend(moof(
+            first_sample
+                .checked_add(index.checked_mul(4).unwrap())
+                .unwrap(),
+        ));
+    }
+    file.extend(written(
+        b"mdat",
+        &[&vec![0xAA; usize::try_from(samples_length).unwrap()]],
+    ));
+    let last_sample = length(file.len())
+        .checked_add(moof_length)
+        .and_then(|end| end.checked_add(8))
+        .unwrap();
+    file.extend(moof(last_sample));
+    file.extend(written(b"mdat", &[&[0xBB; 4]]));
+    file
+}
+
+/// Returns a movie file whose samples of one `imda` wait for it while samples ahead of their fragments are held
+///
+/// The file holds track 1, whose media data is in the same file, and track
+/// 2, whose media data is in the `imda` of the sequence number of each
+/// movie fragment; the `moov` declares no sample. A fragment of
+/// sequence number 1 declares `waiting` samples of track 2, which count from
+/// the payload of the `imda` of identifier 1. `ahead` fragments follow, each
+/// of one sample of track 1 that lies in one `mdat` at the end of the file,
+/// then that `imda`, then that `mdat`.
+///
+/// Each sample is 4 bytes lasting 20, its sample entry the first, as the
+/// `trex` of its track gives them.
+///
+/// # Panics
+///
+/// * A length passes what a `u64` counts.
+#[must_use]
+#[expect(
+    clippy::unwrap_used,
+    reason = "a test of a file longer than a u64 counts fails"
+)]
+pub fn samples_waiting_for_an_imda(waiting: u32, ahead: usize) -> Vec<u8> {
+    let mut identified = track(2, 20, &[], &[], &[]);
+    identified.mdia.minf.dinf.dref.data_entries =
+        Vec::from([DataEntry::SeqNumImda(DataEntrySeqNumImdaBox::default())]);
+    let mut movie = movie([track(1, 20, &[], &[], &[]), identified]);
+    let trex = |track_id| {
+        let mut trex = TrackExtendsBox::default();
+        trex.track_id = track_id;
+        trex.default_sample_description_index = 1;
+        trex.default_sample_duration = 20;
+        trex.default_sample_size = 4;
+        trex
+    };
+    let mut mvex = MovieExtendsBox::default();
+    mvex.trex = Vec::from([trex(1), trex(2)]);
+    movie.mvex = Some(mvex);
+    movie.mvhd.next_track_id = 3;
+    let moof = |sequence_number, track_id, sample_count, base_data_offset| {
+        let mut traf = TrackFragmentBox::default();
+        traf.tfhd.track_id = track_id;
+        traf.tfhd.base_data_offset = base_data_offset;
+        let mut trun = TrackRunBox::default();
+        trun.data_offset = base_data_offset.is_none().then_some(4);
+        trun.samples = TrackRunSamples::EmptyRows { sample_count };
+        traf.trun = Vec::from([trun]);
+        let mut moof = MovieFragmentBox::default();
+        moof.mfhd.sequence_number = sequence_number;
+        moof.traf = Vec::from([traf]);
+        encoded(&moof)
+    };
+    let length = |length: usize| u64::try_from(length).unwrap();
+    let mut file = encoded(&movie);
+    file.extend(moof(1, 2, waiting, None));
+    let ahead_length = length(moof(2, 1, 1, Some(0)).len());
+    let identified_length = u64::from(waiting)
+        .checked_mul(4)
+        .and_then(|samples| samples.checked_add(12))
+        .unwrap();
+    let first_sample = length(ahead)
+        .checked_mul(ahead_length)
+        .and_then(|moofs| moofs.checked_add(length(file.len())))
+        .and_then(|end| end.checked_add(identified_length))
+        .and_then(|end| end.checked_add(8))
+        .unwrap();
+    for (index, sequence_number) in (0..length(ahead)).zip(2..) {
+        file.extend(moof(
+            sequence_number,
+            1,
+            1,
+            Some(
+                first_sample
+                    .checked_add(index.checked_mul(4).unwrap())
+                    .unwrap(),
+            ),
+        ));
+    }
+    file.extend(written(
+        b"imda",
+        &[
+            &[0, 0, 0, 1],
+            &vec![0xCC; usize::try_from(waiting).unwrap().checked_mul(4).unwrap()],
+        ],
+    ));
+    file.extend(written(
+        b"mdat",
+        &[&vec![0xAA; ahead.checked_mul(4).unwrap()]],
+    ));
+    file
 }

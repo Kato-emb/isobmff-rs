@@ -693,7 +693,7 @@ mod tests {
             .map(|(index, reported)| {
                 let mut entry = match ours.sample_descriptions.get(index) {
                     Some(SampleDescription::Typed(entry)) => entry.clone(),
-                    _ => SampleEntry::default(),
+                    _ => SampleEntry::new(FourCc::new([0; 4]), 0, Vec::new()),
                 };
                 entry.format =
                     FourCc::new(gpac_str(reported, "@Type").as_bytes().try_into().unwrap());
@@ -1386,7 +1386,7 @@ mod tests {
                 .map(|reported| {
                     let mut entry = RollRecoveryEntry::default();
                     entry.roll_distance = gpac_integer(reported, "@roll_distance");
-                    SampleGroupDescriptionEntry::RollRecovery(entry)
+                    SampleGroupDescriptionEntry::try_from(&entry).unwrap()
                 })
                 .collect(),
             b"rap " => entries("VisualRandomAccessEntry")
@@ -1397,7 +1397,7 @@ mod tests {
                     if entry.num_leading_samples_known {
                         entry.num_leading_samples = gpac_integer(reported, "@num_leading_samples");
                     }
-                    SampleGroupDescriptionEntry::VisualRandomAccess(entry)
+                    SampleGroupDescriptionEntry::try_from(&entry).unwrap()
                 })
                 .collect(),
             b"tele" => entries("TemporalLevelEntry")
@@ -1405,7 +1405,7 @@ mod tests {
                     let mut entry = TemporalLevelEntry::default();
                     entry.level_independently_decodable =
                         gpac_str(reported, "@level_independently_decodable") == "1";
-                    SampleGroupDescriptionEntry::TemporalLevel(entry)
+                    SampleGroupDescriptionEntry::try_from(&entry).unwrap()
                 })
                 .collect(),
             _ => return description,

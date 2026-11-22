@@ -1,0 +1,17 @@
+---
+source: crates/isobmff/tests/framing.rs
+expression: lines
+---
+[
+    "the payload of the box `moov` at offset 0 is 32 bytes, over the limit of 16",
+    "moof gathered",
+    "mdat",
+    "the box header at offset 68 does not read",
+    "--",
+    "ftyp gathered",
+    "the input ends inside the box `moov` at offset 16",
+    "--",
+    "ftyp gathered",
+    "the input ends inside the box header at offset 16",
+    "--",
+]

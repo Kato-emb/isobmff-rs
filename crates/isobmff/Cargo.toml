@@ -12,5 +12,15 @@ license.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+[dependencies]
+isobmff-boxes.workspace = true
+isobmff-core = { workspace = true, features = ["alloc"] }
+
+[dev-dependencies]
+# Pins the events of a file where no other implementation can judge them.
+insta = { version = "1.43.2", default-features = false }
+# Reads the conformance files, which the reading of boxes is checked against.
+isobmff-test-support.workspace = true
+
 [lints]
 workspace = true

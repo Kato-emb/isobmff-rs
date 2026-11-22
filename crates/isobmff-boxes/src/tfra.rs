@@ -82,6 +82,16 @@ impl TrackFragmentRandomAccessBox {
     }
 }
 
+/// Returns the `number_of_entry` of the `tfra` whose payload is `payload`, read without the entries it declares, or `None` where the payload ends before it
+///
+/// The field follows the version and flags, `track_ID` and the word of the
+/// lengths of the numbers, ISO/IEC 14496-12 §8.8.10.2.
+pub(crate) fn number_of_entry(payload: &[u8]) -> Option<u32> {
+    let mut reader = FieldReader::new(payload);
+    reader.read_bytes::<{ 4 + 4 + 4 }>().ok()?;
+    reader.read_u32().ok()
+}
+
 impl BoxDefinition for TrackFragmentRandomAccessBox {
     const BOX_TYPE: BoxType = BoxType::compact(*b"tfra");
 }
@@ -295,6 +305,19 @@ mod tests {
         assert_eq!(
             TrackFragmentRandomAccessBox::decode_payload(b"\x02\0\0\0"),
             Err(Error::unsupported_version(2))
+        );
+    }
+
+    #[test]
+    fn the_number_of_entry_reads_without_the_entries_it_declares() {
+        let payload = TFRA_V0.get(8..).unwrap();
+
+        assert_eq!(
+            (
+                super::number_of_entry(payload),
+                super::number_of_entry(payload.get(..15).unwrap())
+            ),
+            (Some(2), None)
         );
     }
 }

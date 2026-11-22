@@ -207,9 +207,7 @@ impl DownMixInstructions {
             downmix_instructions,
         })
     }
-}
 
-impl DownMixInstructions {
     /// Returns the `baseChannelCount` the coefficients the box holds are of, or [`None`] where no downmix holding coefficients tells it
     ///
     /// # Errors

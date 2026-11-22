@@ -7,15 +7,15 @@ use isobmff_core::{
     OtherBoxes, U16F16,
 };
 
+use super::audio_v1::AudioSampleEntryV1;
+use super::children::{
+    AnyEntryBoxes, children_len, encode_children, encode_optional, split_children,
+};
+use super::entry::{SampleEntry, from_class};
 use crate::btrt::BitRateBox;
 use crate::chnl::{ChannelLayout, ChannelStructure};
 use crate::dmix::{DownMixInstructions, UndecodedDownMixInstructions};
 use crate::rinf::RestrictedSchemeInfoBox;
-use crate::sample_entry::audio_v1::AudioSampleEntryV1;
-use crate::sample_entry::{
-    AnyEntryBoxes, SampleEntry, children_len, encode_children, encode_optional, from_class,
-    split_children,
-};
 use crate::scrb::ScrambleSchemeInfoBox;
 use crate::sinf::ProtectionSchemeInfoBox;
 use crate::srat::SamplingRateBox;

@@ -175,10 +175,42 @@ dependencies = [
 ]
 
 [[package]]
+name = "isobmff"
+version = "0.0.0"
+dependencies = [
+ "isobmff-boxes",
+ "isobmff-core",
+]
+
+[[package]]
 name = "isobmff-benches"
 version = "0.0.0"
 dependencies = [
  "criterion",
+ "isobmff",
+ "isobmff-boxes",
+ "isobmff-core",
+ "isobmff-test-support",
+]
+
+[[package]]
+name = "isobmff-boxes"
+version = "0.0.0"
+dependencies = [
+ "isobmff-core",
+]
+
+[[package]]
+name = "isobmff-core"
+version = "0.0.0"
+
+[[package]]
+name = "isobmff-test-support"
+version = "0.0.0"
+dependencies = [
+ "isobmff-boxes",
+ "isobmff-core",
+ "serde_json",
 ]
 
 [[package]]

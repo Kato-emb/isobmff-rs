@@ -4,14 +4,13 @@ use alloc::vec::Vec;
 
 use isobmff_core::{BoxEncode, Error, FieldWriter, FourCc, OtherBoxes, U16F16};
 
+use super::audio::{Fields, check_downmixes, take_channel_boxes};
+use super::children::{AnyEntryBoxes, children_len, encode_children, encode_optional};
+use super::entry::{SampleEntry, from_class};
 use crate::btrt::BitRateBox;
 use crate::chnl::ChannelLayout;
 use crate::dmix::DownMixInstructions;
 use crate::rinf::RestrictedSchemeInfoBox;
-use crate::sample_entry::audio::{Fields, check_downmixes, take_channel_boxes};
-use crate::sample_entry::{
-    AnyEntryBoxes, SampleEntry, children_len, encode_children, encode_optional, from_class,
-};
 use crate::scrb::ScrambleSchemeInfoBox;
 use crate::sinf::ProtectionSchemeInfoBox;
 use crate::srat::SamplingRateBox;

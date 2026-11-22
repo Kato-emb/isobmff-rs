@@ -10,16 +10,16 @@
 //! nothing else: no arithmetic on fixed-point numbers.
 
 #[cfg(feature = "alloc")]
-pub(crate) mod base64_string;
-pub(crate) mod fixed_point;
+mod base64_string;
+mod fixed_point;
 pub(crate) mod fourcc;
-pub(crate) mod full_box;
+mod full_box;
 #[cfg(feature = "alloc")]
-pub(crate) mod utf8_list;
+mod utf8_list;
 #[cfg(feature = "alloc")]
-pub(crate) mod utf8_string;
+mod utf8_string;
 #[cfg(feature = "alloc")]
-pub(crate) mod utf_string;
+mod utf_string;
 pub(crate) mod uuid;
 
 #[cfg(feature = "alloc")]

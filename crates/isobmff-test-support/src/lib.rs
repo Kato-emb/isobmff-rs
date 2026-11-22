@@ -130,15 +130,21 @@ pub fn gpac_children(node: &Value) -> Vec<&Value> {
         .into_iter()
         .flatten()
         .filter(|(key, _)| !key.starts_with('@'))
-        .flat_map(|(_, value)| {
-            if let Value::Array(items) = value {
-                items.iter().collect()
-            } else {
-                vec![value]
-            }
-        })
+        .flat_map(|(_, value)| gpac_list(value))
         .filter(|item| item.get("@Type").is_some() && item.get("@Size").is_some())
         .collect()
+}
+
+/// Returns what GPAC reports under one name, which it reports as an array where there are several and as the value alone where there is one
+#[must_use]
+pub fn gpac_list(value: &Value) -> Vec<&Value> {
+    match value {
+        Value::Array(items) => items.iter().collect(),
+        Value::Null => Vec::new(),
+        value @ (Value::Bool(_) | Value::Number(_) | Value::String(_) | Value::Object(_)) => {
+            vec![value]
+        }
+    }
 }
 
 /// Returns the type and total GPAC reports for a box, as GPAC spells them
@@ -208,9 +214,11 @@ pub struct FfprobePacket {
     pub time_base: (u64, u64),
     /// Whether `ffprobe` flags the packet to be discarded after decoding: one an edit list does not present from its start
     pub discard: bool,
+    /// Whether `ffprobe` flags the packet a key frame: a sync sample
+    pub key: bool,
 }
 
-/// Returns the packets `ffprobe -show_streams -show_packets -of json` reports for `file`, in the order it reports them
+/// Returns the packets `ffprobe -show_streams -show_packets -of json` reports for `file`, with the options `arguments` before them, in the order it reports them
 ///
 /// # Panics
 ///
@@ -222,16 +230,20 @@ pub struct FfprobePacket {
     clippy::unwrap_used,
     reason = "a test checking against what ffprobe does not report fails"
 )]
-pub fn ffprobe_packets(file: &Path) -> Vec<FfprobePacket> {
+pub fn ffprobe_packets(arguments: &[&str], file: &Path) -> Vec<FfprobePacket> {
     let output = ffprobe(
         &[
-            "-v",
-            "error",
-            "-show_streams",
-            "-show_packets",
-            "-of",
-            "json",
-        ],
+            arguments,
+            &[
+                "-v",
+                "error",
+                "-show_streams",
+                "-show_packets",
+                "-of",
+                "json",
+            ],
+        ]
+        .concat(),
         file,
     );
     assert!(
@@ -289,6 +301,10 @@ pub fn ffprobe_packets(file: &Path) -> Vec<FfprobePacket> {
                     .get("flags")
                     .and_then(Value::as_str)
                     .is_some_and(|flags| flags.contains('D')),
+                key: packet
+                    .get("flags")
+                    .and_then(Value::as_str)
+                    .is_some_and(|flags| flags.contains('K')),
             }
         })
         .collect()
