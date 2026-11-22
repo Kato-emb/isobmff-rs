@@ -9,7 +9,9 @@
 //! 2. a box read is written back, or refused with one of the errors
 //!    [`refuses_a_value`] admits: a reader keeps values the specification
 //!    forbids, which a writer does not write
-//! 3. a box written back reads back as the box it was written from
+//! 3. a box written back reads back as the box it was written from, or, for
+//!    a box not equal to itself, such as one holding a float that is not a
+//!    number, reads back as a box that writes back the same bytes
 //!
 //! The entries of a [`SampleDescriptionBox`] are also read as every class of
 //! [`SAMPLE_ENTRY_CLASSES`], and each class read is held to properties 2 and
@@ -617,6 +619,20 @@ fn round_trip<Box: BoxDecode + BoxEncode + PartialEq + Debug>(payload: &[u8]) {
     }
 
     match Box::decode_payload(&written) {
+        // Why not compare the box read back: a float that is not a number is
+        // kept as the bits read, and is equal to no float, itself included.
+        #[expect(
+            clippy::eq_op,
+            reason = "a box not equal to itself is what this arm tells apart"
+        )]
+        Ok(read_back) if read != read => {
+            let mut rewritten = vec![0; usize::try_from(read_back.payload_len()).unwrap()];
+            read_back.encode_payload(&mut rewritten).unwrap();
+            assert_eq!(
+                rewritten, written,
+                "box written back writes back other bytes"
+            );
+        }
         Ok(read_back) => assert_eq!(read_back, read, "box written back reads back as another"),
         Err(error) => panic!("box written back fails to read back: {error}\n{read:?}"),
     }
