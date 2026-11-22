@@ -571,12 +571,9 @@ fn movie_in_identified_media_data() -> Vec<Edit> {
     edits
 }
 
-/// The location of the file of media data a `url ` names, as its `location` string with the terminating null
-fn location(name: &str) -> Vec<u8> {
-    [name.as_bytes(), &[0]].concat()
-}
-
 /// The `url ` of track `track` of a movie naming the file `name` instead of the file itself: no flag, and a `location`, ISO/IEC 14496-12 §8.7.2.3
+///
+/// The `location` is `name` with the null that terminates the string.
 fn data_entry_elsewhere(track: usize, name: &str) -> [Edit; 2] {
     [
         Edit::Set32 {
@@ -587,7 +584,7 @@ fn data_entry_elsewhere(track: usize, name: &str) -> [Edit; 2] {
         Edit::Insert {
             path: data_entry(track),
             at: 4,
-            bytes: location(name),
+            bytes: [name.as_bytes(), &[0]].concat(),
         },
     ]
 }
