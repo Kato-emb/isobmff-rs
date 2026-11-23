@@ -2,6 +2,8 @@
 
 use isobmff_boxes::SampleFlags;
 
+use crate::structure_data::data_layout::DataOrigin;
+
 /// What the structure-data declares of a `sample`, apart from where its bytes lie
 ///
 /// The fields of a sample a sample table (ISO/IEC 14496-12 §8.5) or a track
@@ -29,4 +31,31 @@ pub struct SampleProperties {
     /// `sample_description_index`, from 1, of the sample entry that describes
     /// the sample
     pub sample_description_index: u32,
+}
+
+/// Where the bytes of a `sample` lie, with what the structure-data declares of it
+///
+/// The location of samples of ISO/IEC 14496-12 §6.1: the data reference
+/// entry the sample entry of the sample names specifies the container of its
+/// data, and `offset` and `size` give its byte range there, counted from the
+/// `data_origin`.
+#[expect(
+    clippy::exhaustive_structs,
+    reason = "a caller of a writer builds one, and a sample lies at an offset from an origin for a size whatever else it declares"
+)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SampleLocation {
+    /// What the structure-data declares of the sample
+    pub properties: SampleProperties,
+    /// What `offset` counts from, which the data reference entry sets for a
+    /// sample table, §6.1 Table 1, and the track fragment header with it for
+    /// a track fragment, §8.8.7.1 Table 6
+    pub data_origin: DataOrigin,
+    /// Data offset of the first byte of the sample, from the `data_origin`:
+    /// the start of its chunk (§8.7.5) or of the data of its track fragment
+    /// run (§8.8.8), and the sizes of the samples before it there
+    pub offset: u64,
+    /// Number of the bytes of the sample, as the sample size table (§8.7.3)
+    /// or the track fragment (§8.8.7, §8.8.8) gives it
+    pub size: u32,
 }
