@@ -1,10 +1,10 @@
 //! [`BoxHeader`], the header every box opens with
 
+use crate::box_structure::box_size::{BoxSize, CompactSize, ExtendedSize};
+use crate::box_structure::box_type::{BoxType, CompactType, ExtendedType};
 use crate::data_types::fourcc::FourCc;
 use crate::data_types::uuid::Uuid;
 use crate::error::Error;
-use crate::framing::box_size::{BoxSize, CompactSize, ExtendedSize};
-use crate::framing::box_type::{BoxType, CompactType, ExtendedType};
 
 /// Value of the `size` field that moves the total into the `largesize` field
 const EXTENDED_SIZE_MARKER: u32 = 1;
@@ -274,9 +274,9 @@ impl BoxHeader {
 #[cfg(test)]
 mod tests {
     use super::{BoxHeader, Error};
+    use crate::box_structure::box_size::{BoxSize, CompactSize, ExtendedSize};
+    use crate::box_structure::box_type::{BoxType, ExtendedType};
     use crate::data_types::uuid::Uuid;
-    use crate::framing::box_size::{BoxSize, CompactSize, ExtendedSize};
-    use crate::framing::box_type::{BoxType, ExtendedType};
 
     const EXTENDED_TYPE: [u8; 16] = [
         0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0xfe, 0xdc, 0xba, 0x98, 0x76, 0x54, 0x32,

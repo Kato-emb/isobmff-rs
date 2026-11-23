@@ -87,8 +87,8 @@ impl TryFrom<&SampleEntry> for XmlMetaDataSampleEntry {
     ///
     /// * [`UnsupportedValue`](isobmff_core::ErrorKind::UnsupportedValue) for
     ///   `format`: the entry is of a format other than `metx`.
-    /// * The failures of a child that does not frame, and of a `btrt` given
-    ///   more than once.
+    /// * The failures of a child that cannot be split off the payload, and of a
+    ///   `btrt` given more than once.
     fn try_from(entry: &SampleEntry) -> Result<Self, Error> {
         of_format(entry, Self::FORMAT)?;
         let mut reader = FieldReader::new(&entry.remaining_data);
@@ -204,8 +204,8 @@ impl TryFrom<&SampleEntry> for TextMetaDataSampleEntry {
     ///
     /// * [`UnsupportedValue`](isobmff_core::ErrorKind::UnsupportedValue) for
     ///   `format`: the entry is of a format other than `mett`.
-    /// * The failures of a child that does not frame, and of a box of
-    ///   ISO/IEC 14496-12 given more than once.
+    /// * The failures of a child that cannot be split off the payload, and of a
+    ///   box of ISO/IEC 14496-12 given more than once.
     fn try_from(entry: &SampleEntry) -> Result<Self, Error> {
         of_format(entry, Self::FORMAT)?;
         let read = MimeFormat::read(entry)?;
@@ -322,8 +322,9 @@ impl TryFrom<&SampleEntry> for UriMetaSampleEntry {
     ///   `format`: the entry is of a format other than `urim`.
     /// * [`MissingMandatoryBox`](isobmff_core::ErrorKind::MissingMandatoryBox):
     ///   the entry holds no `uri `.
-    /// * The failures of a child that does not frame, of a `uri ` that does
-    ///   not read, and of a box of ISO/IEC 14496-12 given more than once.
+    /// * The failures of a child that cannot be split off the payload, of a
+    ///   `uri ` that does not read, and of a box of ISO/IEC 14496-12 given more
+    ///   than once.
     fn try_from(entry: &SampleEntry) -> Result<Self, Error> {
         of_format(entry, Self::FORMAT)?;
         let (derived_boxes, mut children) = split_children(&entry.remaining_data, &URI_DEFINED)?;
@@ -437,8 +438,9 @@ impl TryFrom<&SampleEntry> for BoxedMetadataSampleEntry {
     ///   `format`: the entry is of a format other than `mebx`.
     /// * [`MissingMandatoryBox`](isobmff_core::ErrorKind::MissingMandatoryBox):
     ///   the entry holds no `keys`.
-    /// * The failures of a child that does not frame, of a `keys` that does
-    ///   not read, and of a box of ISO/IEC 14496-12 given more than once.
+    /// * The failures of a child that cannot be split off the payload, of a
+    ///   `keys` that does not read, and of a box of ISO/IEC 14496-12 given more
+    ///   than once.
     fn try_from(entry: &SampleEntry) -> Result<Self, Error> {
         of_format(entry, Self::FORMAT)?;
         let (derived_boxes, mut children) = split_children(&entry.remaining_data, &BOXED_DEFINED)?;

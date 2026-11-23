@@ -84,8 +84,8 @@ impl TryFrom<&SampleEntry> for XmlSubtitleSampleEntry {
     ///
     /// * [`UnsupportedValue`](isobmff_core::ErrorKind::UnsupportedValue) for
     ///   `format`: the entry is of a format other than `stpp`.
-    /// * The failures of a child that does not frame, and of a box of
-    ///   ISO/IEC 14496-12 given more than once.
+    /// * The failures of a child that cannot be split off the payload, and of a
+    ///   box of ISO/IEC 14496-12 given more than once.
     fn try_from(entry: &SampleEntry) -> Result<Self, Error> {
         of_format(entry, Self::FORMAT)?;
         let mut reader = FieldReader::new(&entry.remaining_data);
@@ -204,8 +204,8 @@ impl TryFrom<&SampleEntry> for TextSubtitleSampleEntry {
     ///
     /// * [`UnsupportedValue`](isobmff_core::ErrorKind::UnsupportedValue) for
     ///   `format`: the entry is of a format other than `sbtt`.
-    /// * The failures of a child that does not frame, and of a box of
-    ///   ISO/IEC 14496-12 given more than once.
+    /// * The failures of a child that cannot be split off the payload, and of a
+    ///   box of ISO/IEC 14496-12 given more than once.
     fn try_from(entry: &SampleEntry) -> Result<Self, Error> {
         of_format(entry, Self::FORMAT)?;
         let read = MimeFormat::read(entry)?;

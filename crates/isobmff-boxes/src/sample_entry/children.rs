@@ -26,8 +26,8 @@ impl AnyEntryChildren {
     ///
     /// # Errors
     ///
-    /// * The failures of a child that does not frame, and of a `btrt` given
-    ///   more than once.
+    /// * The failures of a child that cannot be split off the payload, and of a
+    ///   `btrt` given more than once.
     pub(super) fn read(payload: &[u8]) -> Result<Self, Error> {
         let (derived_boxes, mut children) = split_children(payload, &[])?;
 
@@ -151,7 +151,8 @@ pub(crate) fn encode_optional<'buffer, Child: BoxEncode + BoxDefinition>(
 ///
 /// # Errors
 ///
-/// * The failures of [`ChildBoxes::decode`]: a child does not frame.
+/// * The failures of [`ChildBoxes::decode`]: a child cannot be split off the
+///   payload.
 pub(super) fn split_children<'payload>(
     payload: &'payload [u8],
     defined: &[BoxType],

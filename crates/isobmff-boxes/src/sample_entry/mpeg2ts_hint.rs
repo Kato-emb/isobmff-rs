@@ -56,8 +56,8 @@ pub(super) struct Mpeg2TsEntry {
 /// * [`TruncatedPayload`](isobmff_core::ErrorKind::TruncatedPayload): the
 ///   bytes end inside a field, counted from the end of
 ///   `data_reference_index`.
-/// * The failures of a child that does not frame, and of a `tPAT`, `tsti`,
-///   `istm`, `rinf` or `btrt` given more than once.
+/// * The failures of a child that cannot be split off the payload, and of a
+///   `tPAT`, `tsti`, `istm`, `rinf` or `btrt` given more than once.
 pub(super) fn read_entry(entry: &SampleEntry, format: FourCc) -> Result<Mpeg2TsEntry, Error> {
     of_format(entry, format)?;
     let mut reader = FieldReader::new(&entry.remaining_data);
@@ -226,8 +226,8 @@ impl TryFrom<&SampleEntry> for Mpeg2TsReceptionSampleEntry {
     /// * [`TruncatedPayload`](isobmff_core::ErrorKind::TruncatedPayload): the
     ///   bytes end inside a field, counted from the end of
     ///   `data_reference_index`.
-    /// * The failures of a child that does not frame, and of a `tPAT`,
-    ///   `tsti`, `istm`, `rinf` or `btrt` given more than once.
+    /// * The failures of a child that cannot be split off the payload, and of a
+    ///   `tPAT`, `tsti`, `istm`, `rinf` or `btrt` given more than once.
     fn try_from(entry: &SampleEntry) -> Result<Self, Error> {
         let Mpeg2TsEntry {
             preceding_bytes_len,

@@ -147,8 +147,9 @@ impl TryFrom<&SampleEntry> for RtpHintSampleEntry {
     ///   `data_reference_index`.
     /// * [`MissingMandatoryBox`](isobmff_core::ErrorKind::MissingMandatoryBox):
     ///   the entry holds no `tims`.
-    /// * The failures of a child that does not frame, of a `tims` that does
-    ///   not read, and of a box of ISO/IEC 14496-12 given more than once.
+    /// * The failures of a child that cannot be split off the payload, of a
+    ///   `tims` that does not read, and of a box of ISO/IEC 14496-12 given more
+    ///   than once.
     fn try_from(entry: &SampleEntry) -> Result<Self, Error> {
         let RtpEntry {
             max_packet_size,
@@ -294,9 +295,9 @@ impl TryFrom<&SampleEntry> for SrtpHintSampleEntry {
     ///   `data_reference_index`.
     /// * [`MissingMandatoryBox`](isobmff_core::ErrorKind::MissingMandatoryBox):
     ///   the entry holds no `tims` or no `srpp`.
-    /// * The failures of a child that does not frame, of a `tims` or an
-    ///   `srpp` that does not read, and of a box of ISO/IEC 14496-12 given
-    ///   more than once.
+    /// * The failures of a child that cannot be split off the payload, of a
+    ///   `tims` or an `srpp` that does not read, and of a box of ISO/IEC
+    ///   14496-12 given more than once.
     fn try_from(entry: &SampleEntry) -> Result<Self, Error> {
         let RtpEntry {
             max_packet_size,

@@ -3,9 +3,9 @@
 use core::error;
 use core::fmt;
 
+use crate::box_structure::box_type::BoxType;
 use crate::codec::field::FieldWidth;
 use crate::data_types::fourcc::FourCc;
-use crate::framing::box_type::BoxType;
 
 /// Boxes a failure holds of the path out of the containers it was read in
 const CONTAINER_DEPTH: usize = 8;
@@ -176,7 +176,7 @@ impl Error {
         Self::new(ErrorKind::InvalidBase64String)
     }
 
-    /// Returns the failure of a count that disagrees with the entries it frames
+    /// Returns the failure of a count that disagrees with the entries the payload holds
     #[must_use]
     pub const fn entry_count_mismatch(declared_entries: u64, actual_entries: u64) -> Self {
         Self::new(ErrorKind::EntryCountMismatch {
@@ -417,7 +417,7 @@ pub enum ErrorKind {
     /// reader keeps such bytes as found, so this is reported where they would
     /// be written.
     InvalidBase64String,
-    /// Count a box declares does not match the entries it frames for itself
+    /// Count a box declares does not match the entries its payload holds
     #[non_exhaustive]
     EntryCountMismatch {
         /// Count the `entry_count` field declares
@@ -689,9 +689,9 @@ mod tests {
     use alloc::vec::Vec;
 
     use super::Error;
+    use crate::box_structure::box_type::BoxType;
     use crate::codec::field::FieldWidth;
     use crate::data_types::fourcc::FourCc;
-    use crate::framing::box_type::BoxType;
 
     #[test]
     fn a_failure_names_the_boxes_it_was_reached_through_outermost_first() {

@@ -1,9 +1,9 @@
 //! Values a box is read into and written from
 //!
-//! The framing of a box says nothing of its contents: the type that names a
-//! box is settled by its Definition subclause, and what its bytes mean by its
-//! Syntax and Semantics subclauses. The traits here are where a box states
-//! both — the type it is known by, and the payload read into a value and
+//! The header of a box delimits it and says nothing of its contents: the type
+//! that names a box is settled by its Definition subclause, and what its bytes
+//! mean by its Syntax and Semantics subclauses. The traits here are where a box
+//! states both — the type it is known by, and the payload read into a value and
 //! written back from one — over a reader and a writer that take a payload one
 //! field at a time. Reading and writing the whole box follow from the two, and
 //! ask nothing further of the box.

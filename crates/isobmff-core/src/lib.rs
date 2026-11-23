@@ -2,11 +2,11 @@
 //!
 //! A crate that defines boxes of its own — a vendor box, or one from a
 //! specification derived from ISO/IEC 14496-12 — depends on this crate alone.
-//! It holds the vocabulary such a box is written in: the header that frames a
-//! box and the identifiers that name it, the values its fields carry, the
-//! traits a box implements to be read and written — [`BoxDefinition`],
-//! [`BoxDecode`] and [`BoxEncode`] — the children a container box holds, and
-//! the [`Error`] its reading and writing report.
+//! It holds the vocabulary such a box is written in: the header of a box and
+//! the identifiers that name it, the values its fields carry, the traits a box
+//! implements to be read and written — [`BoxDefinition`], [`BoxDecode`] and
+//! [`BoxEncode`] — the children a container box holds, and the [`Error`] its
+//! reading and writing report.
 //!
 //! # `no_std`
 //!
@@ -23,15 +23,19 @@ extern crate alloc;
 
 #[cfg(feature = "alloc")]
 mod any_box;
+mod box_structure;
 mod codec;
 #[cfg(feature = "alloc")]
 mod container;
 mod data_types;
 mod error;
-mod framing;
 
 #[cfg(feature = "alloc")]
 pub use any_box::AnyBox;
+pub use box_structure::{
+    BoxHeader, BoxSize, BoxType, Boxes, CompactSize, CompactType, ExtendedSize, ExtendedType,
+    RawBox,
+};
 pub use codec::{
     BoxDecode, BoxDefinition, BoxEncode, BoxVariants, FieldReader, FieldWidth, FieldWriter,
 };
@@ -41,7 +45,3 @@ pub use container::{ChildBoxes, OtherBoxes};
 pub use data_types::{Base64String, Utf8List, Utf8String, UtfString};
 pub use data_types::{FourCc, FullBoxFlags, FullBoxHeader, I8F8, I16F16, U16F16, Uuid};
 pub use error::{Category, Error, ErrorKind};
-pub use framing::{
-    BoxHeader, BoxSize, BoxType, Boxes, CompactSize, CompactType, ExtendedSize, ExtendedType,
-    RawBox,
-};

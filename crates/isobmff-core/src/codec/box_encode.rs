@@ -1,10 +1,10 @@
 //! [`BoxEncode`], a box written from a value
 
+use crate::box_structure::box_header::BoxHeader;
+use crate::box_structure::box_type::BoxType;
 use crate::codec::box_definition::BoxDefinition;
 use crate::codec::field::FieldWriter;
 use crate::error::Error;
-use crate::framing::box_header::BoxHeader;
-use crate::framing::box_type::BoxType;
 
 /// Returns the length of the whole box `payload` forms under `box_type`, saturating at `u64::MAX`
 pub(crate) fn encoded_len_of(box_type: BoxType, payload: &(impl BoxEncode + ?Sized)) -> u64 {
@@ -233,10 +233,10 @@ pub trait BoxEncode {
 #[cfg(test)]
 mod tests {
     use super::BoxEncode;
+    use crate::box_structure::box_type::BoxType;
     use crate::codec::box_definition::BoxDefinition;
     use crate::codec::field::FieldWriter;
     use crate::error::Error;
-    use crate::framing::box_type::BoxType;
 
     /// Box whose payload is one 32-bit sequence number, declaring a payload length of its own
     struct SequenceNumberBox {

@@ -1,4 +1,4 @@
-//! Framing and box codecs checked against other implementations, on the files of MPEG's `FileFormatConformance`
+//! Box structure and box codecs checked against other implementations, on the files of MPEG's `FileFormatConformance`
 //!
 //! Reading is checked against the box structure and field values GPAC reports
 //! for each file, and writing against what FFmpeg's `ffprobe` reads back.
@@ -17,7 +17,8 @@ mod tests {
     };
     use isobmff_test_support::serde_json::{self, Value};
     use isobmff_test_support::{
-        ConformanceFile, conformance_files, ffprobe, gpac_children, gpac_frame, gpac_type, tally,
+        ConformanceFile, conformance_files, ffprobe, gpac_children, gpac_type, gpac_type_and_size,
+        tally,
     };
 
     /// Box types whose payload is a sequence of boxes and nothing else
@@ -41,8 +42,8 @@ mod tests {
         node: &Value,
         differences: &mut Vec<String>,
     ) {
-        let framed = match Boxes::new(payload).collect::<Result<Vec<RawBox<'_>>, _>>() {
-            Ok(framed) => framed,
+        let children = match Boxes::new(payload).collect::<Result<Vec<RawBox<'_>>, _>>() {
+            Ok(children) => children,
             Err(error) => {
                 differences.push(format!("{file}{path}: {error}"));
                 return;
@@ -55,7 +56,7 @@ mod tests {
                 .and_then(|payload_len| payload_len.checked_add(child.header().encoded_len()))
                 .unwrap_or(u64::MAX)
         };
-        let ours = tally(framed.iter().map(|child| {
+        let ours = tally(children.iter().map(|child| {
             (
                 gpac_type(child.header().box_type().four_cc().as_bytes()),
                 total_of(child),
@@ -71,24 +72,27 @@ mod tests {
         let theirs = tally(
             gpac_nodes
                 .iter()
-                .map(|child| gpac_frame(child))
+                .map(|child| gpac_type_and_size(child))
                 .chain(omitted),
         );
         if ours != theirs {
             differences.push(format!(
-                "{file}{path}: framed {ours:?}, GPAC reports {theirs:?}"
+                "{file}{path}: read {ours:?}, GPAC reports {theirs:?}"
             ));
         }
 
         let mut unmatched = gpac_nodes;
-        for child in &framed {
+        for child in &children {
             let box_type = child.header().box_type();
             if !CONTAINERS.contains(box_type.four_cc().as_bytes()) {
                 continue;
             }
 
-            let frame = (gpac_type(box_type.four_cc().as_bytes()), total_of(child));
-            if let Some(position) = unmatched.iter().position(|node| gpac_frame(node) == frame) {
+            let type_and_size = (gpac_type(box_type.four_cc().as_bytes()), total_of(child));
+            if let Some(position) = unmatched
+                .iter()
+                .position(|node| gpac_type_and_size(node) == type_and_size)
+            {
                 let node = unmatched.remove(position);
                 compare(
                     file,
@@ -212,16 +216,16 @@ mod tests {
         }
     }
 
-    /// Returns the first box of `box_type` in `payload`, as the bytes it was framed from
+    /// Returns the first box of `box_type` in `payload`, as it lies in `payload`
     fn find(payload: &[u8], box_type: BoxType) -> Option<&[u8]> {
         let mut rest = payload;
-        while let Ok((framed, after)) = RawBox::split_first(rest) {
-            if framed.header().box_type() == box_type {
-                let framed_len = usize::try_from(framed.header().encoded_len())
+        while let Ok((raw_box, after)) = RawBox::split_first(rest) {
+            if raw_box.header().box_type() == box_type {
+                let total = usize::try_from(raw_box.header().encoded_len())
                     .unwrap()
-                    .checked_add(framed.payload().len())
+                    .checked_add(raw_box.payload().len())
                     .unwrap();
-                return rest.get(..framed_len);
+                return rest.get(..total);
             }
             rest = after;
         }
@@ -299,7 +303,7 @@ mod tests {
 
     #[test]
     #[ignore = "reads the conformance files ISOBMFF_CONFORMANCE_DIR names"]
-    fn every_box_of_a_conformance_file_frames_as_gpac_reports_it() {
+    fn every_box_of_a_conformance_file_has_the_type_and_size_gpac_reports() {
         let mut differences = Vec::new();
         for ConformanceFile {
             name,

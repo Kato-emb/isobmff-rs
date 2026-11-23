@@ -8,7 +8,7 @@ use isobmff_core::{BoxDecode, BoxDefinition, BoxEncode, BoxType, Error, FieldRea
 ///
 /// Media data, which the structure-data refers to by its absolute offset in
 /// the file. The payload is held whole, so a box read holds a copy of all the
-/// media data it frames.
+/// media data it contains.
 #[doc(alias = "mdat")]
 #[non_exhaustive]
 #[derive(Clone, Default, PartialEq, Eq, Hash, Debug)]

@@ -194,7 +194,7 @@ jobs:
       # The alloc-free build has doctests of its own to pass, without the items alloc adds.
       - run: cargo test --doc -p isobmff-core --no-default-features
 
-  # Framing and box codecs read against what GPAC reports for the files of
+  # Box structure and box codecs read against what GPAC reports for the files of
   # MPEG's FileFormatConformance, which are fetched at a pinned commit rather
   # than committed, and written against what FFmpeg's ffprobe reads back. The
   # tests that need them are ignored elsewhere.

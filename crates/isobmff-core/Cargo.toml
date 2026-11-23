@@ -18,8 +18,8 @@ default = ["alloc"]
 alloc = []
 
 [dev-dependencies]
-# Reads the conformance files and GPAC's reports of them, which the framing is
-# checked against, and runs ffprobe on what is written.
+# Reads the conformance files and GPAC's reports of them, which the reading of
+# boxes is checked against, and runs ffprobe on what is written.
 isobmff-test-support.workspace = true
 
 # Containers need the heap their children are collected on.

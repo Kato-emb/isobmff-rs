@@ -5,11 +5,11 @@ use alloc::vec::Vec;
 use core::any::Any;
 use core::fmt;
 
+use crate::box_structure::box_type::BoxType;
 use crate::codec::box_definition::BoxDefinition;
 use crate::codec::box_encode::{BoxEncode, encode_into, encoded_len_of};
 use crate::codec::field::FieldWriter;
 use crate::error::Error;
-use crate::framing::box_type::BoxType;
 
 /// Box payload once its type is erased
 trait ErasedPayload: Any + BoxEncode + fmt::Debug + Send + Sync {
@@ -238,11 +238,11 @@ mod tests {
     use alloc::vec;
 
     use super::AnyBox;
+    use crate::box_structure::box_type::BoxType;
     use crate::codec::box_definition::BoxDefinition;
     use crate::codec::box_encode::BoxEncode;
     use crate::codec::field::FieldWriter;
     use crate::error::Error;
-    use crate::framing::box_type::BoxType;
 
     /// Box whose payload is one byte, standing in for a type the reader has
     #[derive(Clone, PartialEq, Debug)]

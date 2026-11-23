@@ -71,8 +71,8 @@ impl TryFrom<&SampleEntry> for HapticSampleEntry {
     ///
     /// # Errors
     ///
-    /// * The failures of a child that does not frame, and of a `btrt` given
-    ///   more than once.
+    /// * The failures of a child that cannot be split off the payload, and of a
+    ///   `btrt` given more than once.
     fn try_from(entry: &SampleEntry) -> Result<Self, Error> {
         let children = AnyEntryChildren::read(&entry.remaining_data)?;
 
