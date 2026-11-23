@@ -56,19 +56,19 @@ pub(in crate::structure_data) fn chunk_samples<'a>(
         chunks: ChunkEntries::new(
             stsc,
             ChunkOffsets::new(chunk_offset).unwrap_or(ChunkOffsets::ChunkOffset([].iter())),
+            sample_count,
         ),
         sample_description_index: 0,
         remaining_in_chunk: 0,
         offset: 0,
         entry_sizes: EntrySizes::new(sample_size).unwrap_or(EntrySizes::Table([].iter())),
-        remaining: sample_count,
     }
 }
 
 /// The [`ChunkSample`] of each sample of a sample table, as [`chunk_samples`] returns them
 #[derive(Debug, Clone)]
 pub(in crate::structure_data) struct ChunkSamples<'a> {
-    /// The chunks after the current one
+    /// The chunks after the current one that hold a sample
     chunks: ChunkEntries<'a>,
     /// `sample_description_index` of the entry of `stsc` of the current chunk
     sample_description_index: u32,
@@ -77,14 +77,14 @@ pub(in crate::structure_data) struct ChunkSamples<'a> {
     /// Data offset of the next sample of the current chunk
     offset: u64,
     entry_sizes: EntrySizes<'a>,
-    /// Number of the samples not yet taken
-    remaining: u32,
 }
 
 impl ChunkSamples<'_> {
     /// Returns the number of samples left to take, which fewer chunks, sizes or entries of `stsc` cut short
     pub(in crate::structure_data) const fn remaining(&self) -> u32 {
-        self.remaining
+        self.chunks
+            .remaining
+            .saturating_add(self.remaining_in_chunk)
     }
 }
 
@@ -92,19 +92,13 @@ impl Iterator for ChunkSamples<'_> {
     type Item = ChunkSample;
 
     fn next(&mut self) -> Option<ChunkSample> {
-        self.remaining = self.remaining.checked_sub(1)?;
-        // Why the loop ends: each chunk opened takes one `chunk_offset`.
-        while self.remaining_in_chunk == 0 {
-            let (offset, entry) = self.chunks.next()?;
+        if self.remaining_in_chunk == 0 {
+            let (offset, entry, samples) = self.chunks.next()?;
             (
                 self.offset,
                 self.remaining_in_chunk,
                 self.sample_description_index,
-            ) = (
-                offset,
-                entry.samples_per_chunk,
-                entry.sample_description_index,
-            );
+            ) = (offset, samples, entry.sample_description_index);
         }
         let size = self.entry_sizes.next()?;
         let chunk_sample = ChunkSample {
@@ -115,13 +109,13 @@ impl Iterator for ChunkSamples<'_> {
         self.remaining_in_chunk = self.remaining_in_chunk.saturating_sub(1);
         match self.offset.checked_add(u64::from(size)) {
             Some(offset) => self.offset = offset,
-            None => self.remaining = 0,
+            None => (self.remaining_in_chunk, self.chunks.remaining) = (0, 0),
         }
         Some(chunk_sample)
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        (0, usize::try_from(self.remaining).ok())
+        (0, usize::try_from(self.remaining()).ok())
     }
 }
 
@@ -141,24 +135,17 @@ pub(in crate::structure_data) fn sample_description_indices<'a>(
 ) -> impl Iterator<Item = u32> + 'a {
     let chunk_offsets =
         ChunkOffsets::new(chunk_offset).unwrap_or(ChunkOffsets::ChunkOffset([].iter()));
-    let (mut remaining, mut previous) = (sample_count, None);
-    ChunkEntries::new(stsc, chunk_offsets)
-        .map_while(move |(_, entry)| {
-            (remaining > 0).then(|| {
-                let samples = entry.samples_per_chunk.min(remaining);
-                remaining = remaining.saturating_sub(samples);
-                // Why compare with the entry before rather than return the
-                // index of each chunk: a run holds as many chunks as the chunk
-                // offset table, and its entry is returned once.
-                let is_next_entry =
-                    samples > 0 && !previous.is_some_and(|previous| ptr::eq(previous, entry));
-                if is_next_entry {
-                    previous = Some(entry);
-                }
-                is_next_entry.then_some(entry.sample_description_index)
-            })
-        })
-        .flatten()
+    let mut previous = None;
+    ChunkEntries::new(stsc, chunk_offsets, sample_count).filter_map(move |(_, entry, _)| {
+        // Why compare with the entry before rather than return the index of
+        // each chunk: a run holds as many chunks as the chunk offset table,
+        // and its entry is returned once.
+        let is_next_entry = !previous.is_some_and(|previous| ptr::eq(previous, entry));
+        if is_next_entry {
+            previous = Some(entry);
+        }
+        is_next_entry.then_some(entry.sample_description_index)
+    })
 }
 
 /// Refuses the first `sample_count` samples the tables declare where their bytes end past the last data offset
@@ -186,13 +173,7 @@ pub(in crate::structure_data) fn check_data_offsets(
         return Ok(());
     };
     let mut sample_number = 0_u32;
-    for (first_offset, entry) in ChunkEntries::new(stsc, chunk_offsets) {
-        let samples = entry
-            .samples_per_chunk
-            .min(sample_count.saturating_sub(sample_number));
-        if samples == 0 {
-            continue;
-        }
+    for (first_offset, _, samples) in ChunkEntries::new(stsc, chunk_offsets, sample_count) {
         let overflow = |taken: u32, offset, size| Error::DataOffsetOverflow {
             sample_number: sample_number.saturating_add(taken).saturating_add(1),
             offset,
@@ -229,12 +210,14 @@ pub(in crate::structure_data) fn check_data_offsets(
     Ok(())
 }
 
-/// The `chunk_offset` of each chunk, with the entry of the sample-to-chunk table whose run holds it, ISO/IEC 14496-12 §8.7.4
+/// The `chunk_offset` of each chunk that holds one of the first `sample_count` samples, with the entry of the sample-to-chunk table whose run holds it and the number of those samples it holds, ISO/IEC 14496-12 §8.7.4
 ///
 /// Chunk n takes the entry reached by moving on from the entry of the chunk
 /// before it while the next entry's `first_chunk` is at most n, as
-/// [`chunk_samples`] sets out. The chunks end where the chunk offset table
-/// does, or before the first where `stsc` has no entry.
+/// [`chunk_samples`] sets out, and holds its `samples_per_chunk` samples, or
+/// those of the first `sample_count` left. A chunk that holds none of them is
+/// passed over. The chunks end where the first `sample_count` samples or the
+/// chunk offset table do, or before the first where `stsc` has no entry.
 #[derive(Debug, Clone)]
 struct ChunkEntries<'a> {
     /// The entries of the sample-to-chunk table from that of the chunk before
@@ -246,34 +229,47 @@ struct ChunkEntries<'a> {
     // Why hold the number rather than derive it from the offsets left: that
     // needs the number of the chunks besides.
     chunk_number: u32,
+    /// Number of the first `sample_count` samples no chunk taken holds
+    remaining: u32,
 }
 
 impl<'a> ChunkEntries<'a> {
-    fn new(stsc: &'a SampleToChunkBox, chunk_offsets: ChunkOffsets<'a>) -> Self {
+    fn new(stsc: &'a SampleToChunkBox, chunk_offsets: ChunkOffsets<'a>, sample_count: u32) -> Self {
         Self {
             sample_to_chunk: &stsc.entries,
             chunk_offsets,
             chunk_number: 0,
+            remaining: sample_count,
         }
     }
 }
 
 impl<'a> Iterator for ChunkEntries<'a> {
-    type Item = (u64, &'a SampleToChunkEntry);
+    type Item = (u64, &'a SampleToChunkEntry, u32);
 
-    fn next(&mut self) -> Option<(u64, &'a SampleToChunkEntry)> {
-        let chunk_offset = self.chunk_offsets.next()?;
-        // Why saturate: there are at most `u32::MAX` chunks, the `entry_count`
-        // of a chunk offset table.
-        self.chunk_number = self.chunk_number.saturating_add(1);
-        // Why the loop ends: each entry passed over shortens `sample_to_chunk`.
-        while let [_, rest @ ..] = self.sample_to_chunk
-            && let [next, ..] = rest
-            && next.first_chunk <= self.chunk_number
-        {
-            self.sample_to_chunk = rest;
+    fn next(&mut self) -> Option<(u64, &'a SampleToChunkEntry, u32)> {
+        // Why the loop ends: each pass takes one `chunk_offset`.
+        while self.remaining > 0 {
+            let chunk_offset = self.chunk_offsets.next()?;
+            // Why saturate: there are at most `u32::MAX` chunks, the
+            // `entry_count` of a chunk offset table.
+            self.chunk_number = self.chunk_number.saturating_add(1);
+            // Why the loop ends: each entry passed over shortens
+            // `sample_to_chunk`.
+            while let [_, rest @ ..] = self.sample_to_chunk
+                && let [next, ..] = rest
+                && next.first_chunk <= self.chunk_number
+            {
+                self.sample_to_chunk = rest;
+            }
+            let entry = self.sample_to_chunk.first()?;
+            let samples = entry.samples_per_chunk.min(self.remaining);
+            if samples > 0 {
+                self.remaining = self.remaining.saturating_sub(samples);
+                return Some((chunk_offset, entry, samples));
+            }
         }
-        Some((chunk_offset, self.sample_to_chunk.first()?))
+        None
     }
 }
 
