@@ -1,8 +1,8 @@
-//! The framing of the samples of a sample table: the chunk each lies in, its data offset and its size
+//! The `chunk` each sample of a sample table lies in, its data offset and its size
 //!
-//! The sample-to-chunk table (`stsc`), the chunk offset table (`stco` or
-//! `co64`) and the sample size table (`stsz` or `stz2`), ISO/IEC 14496-12
-//! §8.7.3 to §8.7.5, give each sample its framing, §7.2.2.
+//! They come from the sample-to-chunk table (`stsc`), the chunk offset table
+//! (`stco` or `co64`) and the sample size table (`stsz` or `stz2`), ISO/IEC
+//! 14496-12 §8.7.3 to §8.7.5.
 
 use core::iter::FusedIterator;
 use core::num::{NonZeroU32, NonZeroU64};
@@ -13,7 +13,7 @@ use isobmff_boxes::{
     SampleToChunkBox, SampleToChunkEntry,
 };
 
-use super::data_origin::sample_table_data_origin;
+use super::data_reference::sample_table_data_origin;
 use crate::structure_data::Error;
 
 /// Where the bytes of one sample of a sample table lie in its chunk, with its sample entry
