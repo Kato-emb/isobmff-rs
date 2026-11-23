@@ -15,7 +15,7 @@ use isobmff_boxes::{
 use isobmff_core::BoxDefinition;
 
 use super::Error;
-use super::data_layout::{self, SampleFramings};
+use super::data_layout::{self, ChunkSamples};
 use super::timeline::{self, SampleTimings};
 use crate::{SampleLocation, SampleProperties};
 
@@ -94,7 +94,7 @@ pub(super) fn samples<'a>(
     data_layout::check_data_offsets(stsc, chunk_offset, sample_size, sample_count)?;
     Ok(Samples {
         timings: timeline::sample_timings(stts, ctts, stss, sdtp, sample_count),
-        framings: data_layout::sample_framings(stsc, chunk_offset, sample_size, sample_count),
+        chunk_samples: data_layout::chunk_samples(stsc, chunk_offset, sample_size, sample_count),
         stsd: &stbl.stsd,
         dref,
         track_id,
@@ -105,7 +105,7 @@ pub(super) fn samples<'a>(
 #[derive(Debug, Clone)]
 pub(super) struct Samples<'a> {
     timings: SampleTimings<'a>,
-    framings: SampleFramings<'a>,
+    chunk_samples: ChunkSamples<'a>,
     stsd: &'a SampleDescriptionBox,
     dref: &'a DataReferenceBox,
     track_id: u32,
@@ -113,8 +113,8 @@ pub(super) struct Samples<'a> {
 
 impl Samples<'_> {
     /// Returns the number of samples left to return
-    pub(super) const fn sample_count(&self) -> u32 {
-        self.framings.sample_count()
+    pub(super) const fn remaining(&self) -> u32 {
+        self.chunk_samples.remaining()
     }
 }
 
@@ -122,14 +122,14 @@ impl Iterator for Samples<'_> {
     type Item = SampleLocation;
 
     fn next(&mut self) -> Option<SampleLocation> {
-        let framing = self.framings.next()?;
+        let chunk_sample = self.chunk_samples.next()?;
         let timing = self.timings.next()?;
         // Why end rather than report the failure: `samples` refused a table
         // where this fails, and an iterator cannot return `Err`.
         let data_origin = data_layout::sample_table_data_origin(
             self.stsd,
             self.dref,
-            framing.sample_description_index,
+            chunk_sample.sample_description_index,
         )
         .ok()?;
         Some(SampleLocation {
@@ -139,11 +139,11 @@ impl Iterator for Samples<'_> {
                 sample_duration: timing.sample_duration,
                 sample_composition_time_offset: timing.sample_composition_time_offset,
                 sample_flags: timing.sample_flags,
-                sample_description_index: framing.sample_description_index,
+                sample_description_index: chunk_sample.sample_description_index,
             },
             data_origin,
-            offset: framing.offset,
-            size: framing.size,
+            offset: chunk_sample.offset,
+            size: chunk_sample.size,
         })
     }
 }

@@ -66,9 +66,9 @@ mod tests {
             track(3, 20, &[6, 7], &[(1, 1)], &[300, 50]),
         ]);
         let mut locations = MovieReader::new().handle_movie(&movie).unwrap();
-        assert_eq!(locations.sample_count(), 5);
+        assert_eq!(locations.remaining(), 5);
         let first = locations.next();
-        assert_eq!(locations.sample_count(), 4);
+        assert_eq!(locations.remaining(), 4);
         assert_eq!(
             first.into_iter().chain(locations).collect::<Vec<_>>(),
             [
@@ -331,7 +331,7 @@ mod tests {
     fn the_tables_are_checked_without_a_step_for_each_sample_they_declare() {
         let movie = movie((1..=4).map(track_of_the_most_samples));
         let locations = MovieReader::new().handle_movie(&movie).unwrap();
-        assert_eq!(locations.sample_count(), 4 * u64::from(u32::MAX));
+        assert_eq!(locations.remaining(), 4 * u64::from(u32::MAX));
     }
 
     /// The fixtures of the `isobmff` crate, `tests/fixtures`, each with its name
@@ -448,7 +448,7 @@ mod tests {
                     continue;
                 }
             };
-            let declared = locations.sample_count();
+            let declared = locations.remaining();
             let mut ours = BTreeMap::<u32, Vec<SampleLocation>>::new();
             for location in locations {
                 ours.entry(location.properties.track_id)

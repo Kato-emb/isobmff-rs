@@ -10,8 +10,8 @@ mod chunk;
 mod data_reference;
 
 pub(super) use chunk::{
-    SampleFramings, check_data_offsets, check_sample_to_chunk, chunk_count, chunk_sample_count,
-    sample_count, sample_description_indices, sample_framings,
+    ChunkSamples, check_data_offsets, check_sample_to_chunk, chunk_count, chunk_sample_count,
+    chunk_samples, sample_count, sample_description_indices,
 };
 pub use data_reference::data_entry;
 pub(super) use data_reference::sample_table_data_origin;
