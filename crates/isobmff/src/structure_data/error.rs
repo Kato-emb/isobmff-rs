@@ -59,8 +59,8 @@ pub enum Error {
         previous_first_chunk: u32,
     },
     /// A `sample_description_index` names no sample entry: it is 0, or past
-    /// the entries of the `stsd`, which ISO/IEC 14496-12 §8.5.2.3 numbers
-    /// from 1
+    /// the entries of the `stsd`, which an index counts from 1, ISO/IEC
+    /// 14496-12 §7.3.1 and §8.7.4.3
     SampleDescriptionIndexOutOfRange {
         /// `sample_description_index` found
         sample_description_index: u32,

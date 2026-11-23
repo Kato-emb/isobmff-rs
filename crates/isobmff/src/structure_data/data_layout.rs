@@ -167,7 +167,7 @@ pub(super) struct SampleFraming {
 /// Chunk n takes the entry of `stsc` reached by moving on from the entry of
 /// the chunk before it while the next entry's `first_chunk` is at most n; so
 /// the first chunks take the first entry whatever its `first_chunk`, an
-/// entry whose `first_chunk` is not after the one before it is passed over,
+/// entry the `first_chunk` of the next entry is not after is passed over,
 /// and one past the chunks is never reached. [`check_sample_to_chunk`]
 /// refuses such entries. A chunk of no sample is passed over.
 ///
@@ -366,7 +366,11 @@ pub(super) fn chunk_count(chunk_offset: &ChunkOffsetVariant) -> Option<u32> {
 /// Each entry gives the chunks from its `first_chunk` to the `first_chunk`
 /// of the next entry, or to the last chunk, `samples_per_chunk` samples
 /// each, ISO/IEC 14496-12 §8.7.4.1. An entry whose run holds no chunk, as
-/// one whose `first_chunk` is not after the one before it, gives none.
+/// one the `first_chunk` of the next entry is not after, gives none.
+///
+/// For a table [`check_sample_to_chunk`] lets through, this is the number of
+/// samples [`sample_framings`] returns, where the sizes do not run out
+/// first.
 #[cfg_attr(
     not(test),
     expect(
@@ -379,13 +383,13 @@ pub(super) fn chunk_sample_count(stsc: &SampleToChunkBox, chunk_count: u32) -> u
         .entries
         .iter()
         .skip(1)
-        .map(|next| next.first_chunk)
-        .chain([chunk_count.saturating_add(1)]);
+        .map(|next| u64::from(next.first_chunk))
+        .chain([u64::from(chunk_count).saturating_add(1)]);
     stsc.entries
         .iter()
         .zip(ends)
         .fold(0_u64, |total, (entry, end)| {
-            let chunks = u64::from(end.saturating_sub(entry.first_chunk));
+            let chunks = end.saturating_sub(u64::from(entry.first_chunk));
             total.saturating_add(chunks.saturating_mul(u64::from(entry.samples_per_chunk)))
         })
 }
@@ -591,7 +595,7 @@ mod tests {
     }
 
     #[test]
-    fn an_entry_whose_first_chunk_is_not_after_the_one_before_is_passed_over() {
+    fn an_entry_the_next_first_chunk_is_not_after_is_passed_over() {
         let stsz = stsz(&[1; 9]);
         let indexes = |runs: &[(u32, u32, u32)], chunks: &[u32]| {
             sample_framings(&stsc(runs), &stco(chunks), &stsz, 9)
@@ -662,6 +666,21 @@ mod tests {
         assert_eq!(chunk_sample_count(&stsc(&[(1, 2, 1), (1, 9, 1)]), 2), 9 * 2);
         assert_eq!(chunk_sample_count(&stsc(&[(1, 2, 1), (4, 9, 1)]), 2), 2 * 3);
         assert_eq!(chunk_sample_count(&stsc(&[]), 2), 0);
+        assert_eq!(
+            chunk_sample_count(&stsc(&[(1, 1, 1)]), u32::MAX),
+            u64::from(u32::MAX)
+        );
+    }
+
+    #[test]
+    fn the_chunks_of_a_table_the_check_lets_through_hold_the_samples_the_framings_return() {
+        let stsc = stsc(&[(1, 2, 1), (3, 1, 2), (4, 0, 3), (5, 3, 4)]);
+        let (stco, stsz) = (stco(&[0, 10, 20, 30, 40, 50]), stsz(&[1; 64]));
+        assert_eq!(check_sample_to_chunk(&stsc, 6), Ok(()));
+        assert_eq!(
+            chunk_sample_count(&stsc, 6),
+            u64::try_from(sample_framings(&stsc, &stco, &stsz, 64).count()).unwrap()
+        );
     }
 
     #[test]
@@ -803,15 +822,16 @@ mod tests {
                     *left_out.entry("of a variant not read").or_default() += 1;
                     continue;
                 };
+                if sample_count == 0 {
+                    *left_out.entry("of no sample").or_default() += 1;
+                    continue;
+                }
                 // Why not compare a track whose tables disagree: the sample
                 // table refuses it as the specification reads it.
                 if check_sample_to_chunk(stsc, chunk_count).is_err()
                     || chunk_sample_count(stsc, chunk_count) != u64::from(sample_count)
-                    || sample_count == 0
                 {
-                    *left_out
-                        .entry("whose tables disagree, or of no sample")
-                        .or_default() += 1;
+                    *left_out.entry("whose tables disagree").or_default() += 1;
                     continue;
                 }
                 // Why compare only the samples of this file: ffprobe reads
