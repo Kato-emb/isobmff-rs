@@ -187,9 +187,9 @@ pub enum TrackGroup {
 ///
 /// # Untrusted input
 ///
-/// The box reads each child as it frames it, and allocates room for a child
-/// only once it has read it, so what it allocates is bounded by the length of
-/// the payload, which the caller sets.
+/// The box reads each child as it splits it off the payload, and allocates room
+/// for a child only once it has read it, so what it allocates is bounded by the
+/// length of the payload, which the caller sets.
 #[doc(alias = "trgr")]
 #[non_exhaustive]
 #[derive(Clone, Default, PartialEq, Debug)]

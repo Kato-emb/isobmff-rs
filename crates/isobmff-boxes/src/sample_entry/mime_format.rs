@@ -37,8 +37,8 @@ impl MimeFormat {
     ///
     /// # Errors
     ///
-    /// * The failures of a child that does not frame, and of a box of
-    ///   ISO/IEC 14496-12 given more than once.
+    /// * The failures of a child that cannot be split off the payload, and of a
+    ///   box of ISO/IEC 14496-12 given more than once.
     pub(super) fn read(entry: &SampleEntry) -> Result<Self, Error> {
         let mut reader = FieldReader::new(&entry.remaining_data);
         let content_encoding = Utf8String::from_slice(read_string(&mut reader)?);

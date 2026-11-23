@@ -160,8 +160,8 @@ impl TryFrom<&SampleEntry> for VisualSampleEntry {
     /// * [`TruncatedPayload`](isobmff_core::ErrorKind::TruncatedPayload): the
     ///   bytes end inside a field, counted from the end of
     ///   `data_reference_index`.
-    /// * The failures of a child that does not frame, and of a box of
-    ///   ISO/IEC 14496-12 given more than once.
+    /// * The failures of a child that cannot be split off the payload, and of a
+    ///   box of ISO/IEC 14496-12 given more than once.
     fn try_from(entry: &SampleEntry) -> Result<Self, Error> {
         let mut reader = FieldReader::new(&entry.remaining_data);
         reader.read_bytes::<16>()?;

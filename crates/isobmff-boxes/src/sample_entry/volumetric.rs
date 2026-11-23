@@ -72,8 +72,8 @@ impl TryFrom<&SampleEntry> for VolumetricVisualSampleEntry {
     ///
     /// * [`TruncatedPayload`](isobmff_core::ErrorKind::TruncatedPayload): the
     ///   bytes end inside `compressorname`.
-    /// * The failures of a child that does not frame, and of a `btrt` given
-    ///   more than once.
+    /// * The failures of a child that cannot be split off the payload, and of a
+    ///   `btrt` given more than once.
     fn try_from(entry: &SampleEntry) -> Result<Self, Error> {
         let mut reader = FieldReader::new(&entry.remaining_data);
         let compressor_name = CompressorName::from_bytes(*reader.read_bytes::<32>()?);

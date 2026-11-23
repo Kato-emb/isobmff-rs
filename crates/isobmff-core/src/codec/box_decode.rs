@@ -1,9 +1,9 @@
 //! [`BoxDecode`], a box read into a value
 
+use crate::box_structure::raw_box::RawBox;
 use crate::codec::box_definition::BoxDefinition;
 use crate::codec::field::FieldReader;
 use crate::error::Error;
-use crate::framing::raw_box::RawBox;
 
 /// Value that the payload of a box decodes into
 ///
@@ -64,10 +64,10 @@ pub trait BoxDecode: Sized {
 
     /// Decodes the payload of one box into a value
     ///
-    /// `payload` is that payload whole and nothing besides: framing is settled
-    /// before the call and the header is gone, as
-    /// [`RawBox::payload`](crate::RawBox::payload) leaves it. Routing a box type
-    /// to the implementation that reads it is the caller's part as well.
+    /// `payload` is that payload whole and nothing besides: the box is split
+    /// off its input before the call and the header is gone, as
+    /// [`RawBox::payload`](crate::RawBox::payload) leaves it. Routing a box
+    /// type to the implementation that reads it is the caller's part as well.
     ///
     /// Bytes past the fields [`decode_fields`](Self::decode_fields) reads are
     /// skipped, as ISO/IEC 14496-12 §4.2.2 has a reader do with syntax added at
@@ -89,15 +89,16 @@ pub trait BoxDecode: Sized {
     /// [`BoxEncode::encode`](crate::BoxEncode::encode), which writes the same
     /// box back.
     ///
-    /// The box is framed first and read after, so a header that frames nothing
-    /// is refused before the type it declares is held against
-    /// [`BOX_TYPE`](BoxDefinition::BOX_TYPE). What lies past the box is returned
-    /// as the remainder, so a caller reading boxes laid end to end passes that
-    /// remainder to the next read.
+    /// The box is split off first and read after, so a header that delimits no
+    /// box is refused before the type it declares is held against
+    /// [`BOX_TYPE`](BoxDefinition::BOX_TYPE). What lies past the box is
+    /// returned as the remainder, so a caller reading boxes laid end to end
+    /// passes that remainder to the next read.
     ///
     /// # Errors
     ///
-    /// * The failures of [`RawBox::split_first`]: `input` does not frame a box.
+    /// * The failures of [`RawBox::split_first`]: no box can be split off the
+    ///   front of `input`.
     /// * [`BoxTypeMismatch`](crate::ErrorKind::BoxTypeMismatch): the box at the
     ///   front of `input` declares another type.
     /// * What [`decode_payload`](Self::decode_payload) reports, for the
@@ -146,24 +147,24 @@ pub trait BoxDecode: Sized {
     where
         Self: BoxDefinition,
     {
-        let (framed, rest) = RawBox::split_first(input)?;
-        let found = framed.header().box_type();
+        let (raw_box, rest) = RawBox::split_first(input)?;
+        let found = raw_box.header().box_type();
 
         if found != Self::BOX_TYPE {
             return Err(Error::box_type_mismatch(Self::BOX_TYPE, found));
         }
 
-        Ok((Self::decode_payload(framed.payload())?, rest))
+        Ok((Self::decode_payload(raw_box.payload())?, rest))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::BoxDecode;
+    use crate::box_structure::box_type::BoxType;
     use crate::codec::box_definition::BoxDefinition;
     use crate::codec::field::FieldReader;
     use crate::error::Error;
-    use crate::framing::box_type::BoxType;
 
     /// Box whose payload is one 32-bit sequence number
     #[derive(PartialEq, Debug)]

@@ -1,7 +1,7 @@
 //! Reading and writing back every box of [`isobmff_boxes`]
 //!
 //! The input is the bytes of a file as they lie, so a file of boxes is a seed
-//! as it is. Each box [`Boxes`] frames from it is read as every type of
+//! as it is. Each box [`Boxes`] splits off the input is read as every type of
 //! [`BOXES`] that bears its box type, and one run checks three properties of
 //! each:
 //!
@@ -593,12 +593,12 @@ const SAMPLE_ENTRY_CLASSES: [fn(&SampleEntry); 25] = [
 ];
 
 fuzz_target!(|bytes: &[u8]| {
-    for framed in Boxes::new(bytes) {
-        let Ok(framed) = framed else { break };
-        let box_type = framed.header().box_type();
+    for raw_box in Boxes::new(bytes) {
+        let Ok(raw_box) = raw_box else { break };
+        let box_type = raw_box.header().box_type();
 
         for (_, check) in BOXES.iter().filter(|(listed, _)| *listed == box_type) {
-            check(framed.payload());
+            check(raw_box.payload());
         }
     }
 });

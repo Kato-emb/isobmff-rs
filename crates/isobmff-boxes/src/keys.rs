@@ -78,8 +78,8 @@ impl MetadataKeyBox {
     ///
     /// * [`MissingMandatoryBox`](isobmff_core::ErrorKind::MissingMandatoryBox):
     ///   the box holds no `keyd`.
-    /// * The failures of a child that does not frame, and of a `keyd` that
-    ///   does not read.
+    /// * The failures of a child that cannot be split off the payload, and of a
+    ///   `keyd` that does not read.
     fn decode_payload(local_key_id: FourCc, payload: &[u8]) -> Result<Self, Error> {
         let mut children = ChildBoxes::decode(payload)?;
 
@@ -150,9 +150,9 @@ pub enum MetadataKey {
 ///
 /// # Untrusted input
 ///
-/// The box reads each child as it frames it, and allocates room for a child
-/// only once it has read it, so what it allocates is bounded by the length of
-/// the payload, which the caller sets.
+/// The box reads each child as it splits it off the payload, and allocates room
+/// for a child only once it has read it, so what it allocates is bounded by the
+/// length of the payload, which the caller sets.
 #[doc(alias = "keys")]
 #[non_exhaustive]
 #[derive(Clone, Default, PartialEq, Debug)]

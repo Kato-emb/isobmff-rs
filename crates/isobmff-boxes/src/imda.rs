@@ -8,7 +8,7 @@ use isobmff_core::{BoxDecode, BoxDefinition, BoxEncode, BoxType, Error, FieldRea
 ///
 /// Media data as a [`MediaDataBox`](crate::MediaDataBox) holds it, with an
 /// identifier that data references set up to it use. The payload is held
-/// whole, so a box read holds a copy of all the media data it frames.
+/// whole, so a box read holds a copy of all the media data it contains.
 #[doc(alias = "imda")]
 #[non_exhaustive]
 #[derive(Clone, Default, PartialEq, Eq, Hash, Debug)]

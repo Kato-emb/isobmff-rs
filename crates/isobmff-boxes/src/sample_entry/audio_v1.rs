@@ -102,9 +102,9 @@ impl TryFrom<&SampleEntry> for AudioSampleEntryV1 {
     /// * [`UnsupportedValue`](isobmff_core::ErrorKind::UnsupportedValue) for
     ///   `entry_version`: the bytes open with an `entry_version` other than
     ///   1.
-    /// * The failures of a child that does not frame, of a box of
-    ///   ISO/IEC 14496-12 given more than once, and of a `dmix` read with the
-    ///   `baseChannelCount` the entry gives.
+    /// * The failures of a child that cannot be split off the payload, of a box
+    ///   of ISO/IEC 14496-12 given more than once, and of a `dmix` read with
+    ///   the `baseChannelCount` the entry gives.
     fn try_from(entry: &SampleEntry) -> Result<Self, Error> {
         let (fields, derived_boxes, mut children) = Fields::read(entry, 1)?;
         let (chnl, dmix) = take_channel_boxes(&mut children, fields.channel_count)?;

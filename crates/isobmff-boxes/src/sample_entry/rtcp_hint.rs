@@ -146,8 +146,8 @@ impl TryFrom<&SampleEntry> for RtcpReceptionHintSampleEntry {
     /// * [`TruncatedPayload`](isobmff_core::ErrorKind::TruncatedPayload): the
     ///   bytes end inside a field, counted from the end of
     ///   `data_reference_index`.
-    /// * The failures of a child that does not frame, and of a `rinf` or
-    ///   `btrt` given more than once.
+    /// * The failures of a child that cannot be split off the payload, and of a
+    ///   `rinf` or `btrt` given more than once.
     fn try_from(entry: &SampleEntry) -> Result<Self, Error> {
         let RtcpEntry {
             max_packet_size,

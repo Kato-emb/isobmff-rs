@@ -147,9 +147,9 @@ pub fn gpac_list(value: &Value) -> Vec<&Value> {
     }
 }
 
-/// Returns the type and total GPAC reports for a box, as GPAC spells them
+/// Returns the type and size GPAC reports for a box, as GPAC spells them
 #[must_use]
-pub fn gpac_frame(node: &Value) -> (String, u64) {
+pub fn gpac_type_and_size(node: &Value) -> (String, u64) {
     let box_type = node
         .get("@Type")
         .and_then(Value::as_str)
@@ -164,13 +164,13 @@ pub fn gpac_frame(node: &Value) -> (String, u64) {
     (box_type, size)
 }
 
-/// Returns how many of each box `frames`, of the type and total GPAC gives each, holds
+/// Returns how many of each box `boxes`, of the type and size GPAC gives each, holds
 #[must_use]
-pub fn tally(frames: impl IntoIterator<Item = (String, u64)>) -> BTreeMap<(String, u64), usize> {
-    frames
+pub fn tally(boxes: impl IntoIterator<Item = (String, u64)>) -> BTreeMap<(String, u64), usize> {
+    boxes
         .into_iter()
-        .fold(BTreeMap::new(), |mut tally, frame| {
-            let count = tally.entry(frame).or_insert(0_usize);
+        .fold(BTreeMap::new(), |mut tally, type_and_size| {
+            let count = tally.entry(type_and_size).or_insert(0_usize);
             *count = count.saturating_add(1);
             tally
         })

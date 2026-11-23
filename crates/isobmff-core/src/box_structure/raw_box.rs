@@ -1,14 +1,14 @@
-//! [`RawBox`] and [`Boxes`], a box as the bytes it was framed as
+//! [`RawBox`] and [`Boxes`], a box as it lies in an input
 
 use core::iter::FusedIterator;
 
+use crate::box_structure::box_header::BoxHeader;
 use crate::error::Error;
-use crate::framing::box_header::BoxHeader;
 
 /// Box as it lies in an input: its header, and the `BoxPayload` the header spans, ISO/IEC 14496-12 §4.2.2
 ///
 /// The payload is borrowed from the input and left unread. Encoding the header
-/// in front of it reproduces the bytes the box was framed from.
+/// in front of it reproduces the box's bytes in the input.
 ///
 /// # Examples
 ///
@@ -54,10 +54,10 @@ impl<'a> RawBox<'a> {
     /// lies and never interpreted: this is a split along the declared total,
     /// not a decode of what the box holds.
     ///
-    /// A [`ToEndOfFile`](crate::BoxSize::ToEndOfFile) size frames the rest of
-    /// `input` and leaves nothing after it, wherever the box lies: inside a
-    /// container, that is the rest of the container's payload. The size the
-    /// frame carries states which form it was.
+    /// A box of [`ToEndOfFile`](crate::BoxSize::ToEndOfFile) size takes the
+    /// rest of `input` and leaves nothing after it, wherever the box lies:
+    /// inside a container, that is the rest of the container's payload. The
+    /// size the header carries states which form it was.
     ///
     /// # Errors
     ///
@@ -130,12 +130,12 @@ impl<'a> Iterator for Boxes<'a> {
         }
 
         match RawBox::split_first(self.remaining) {
-            Ok((framed, rest)) => {
+            Ok((raw_box, rest)) => {
                 // Why not bound the steps: a split consumes at least the header
                 // it decodes, so `rest.len() < self.remaining.len()` and every
                 // step shortens what is left until it is empty.
                 self.remaining = rest;
-                Some(Ok(framed))
+                Some(Ok(raw_box))
             }
             Err(error) => {
                 self.remaining = &[];
@@ -153,9 +153,9 @@ mod tests {
     use alloc::vec::Vec;
 
     use super::{Boxes, Error, RawBox};
-    use crate::framing::box_header::BoxHeader;
-    use crate::framing::box_size::{BoxSize, CompactSize};
-    use crate::framing::box_type::BoxType;
+    use crate::box_structure::box_header::BoxHeader;
+    use crate::box_structure::box_size::{BoxSize, CompactSize};
+    use crate::box_structure::box_type::BoxType;
 
     /// Header of a box declaring `total` in the compact `size` field
     fn compact_header(box_type: [u8; 4], total: u32) -> BoxHeader {
@@ -167,7 +167,7 @@ mod tests {
     }
 
     #[test]
-    fn the_end_of_file_size_frames_the_rest_of_the_input() {
+    fn a_box_of_end_of_file_size_takes_the_rest_of_the_input() {
         let input = b"\0\0\0\0mdatPAYLOAD";
 
         assert_eq!(
@@ -207,7 +207,7 @@ mod tests {
     }
 
     #[test]
-    fn an_end_of_file_size_inside_a_container_frames_the_rest_of_its_payload() {
+    fn a_box_of_end_of_file_size_inside_a_container_takes_the_rest_of_its_payload() {
         let input = b"\0\0\0\x20moov\0\0\0\x0cfreeAAAA\0\0\0\0skipBBBB";
         let (container, rest) = RawBox::split_first(input).unwrap();
 
@@ -238,10 +238,10 @@ mod tests {
         let input = b"\0\0\0\x08free\0\0\0\x20free";
         let mut iterator = Boxes::new(input);
 
-        let framed = iterator.by_ref().collect::<Vec<_>>();
+        let boxes = iterator.by_ref().collect::<Vec<_>>();
 
         assert_eq!(
-            framed,
+            boxes,
             vec![
                 Ok(RawBox {
                     header: compact_header(*b"free", 8),

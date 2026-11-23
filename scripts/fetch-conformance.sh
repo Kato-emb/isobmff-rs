@@ -11,7 +11,8 @@ path=data/file_features/published/isobmff
 # The compressed boxes of ISO/IEC 14496-12 §8.16, fetched into a directory of
 # their own: they are under consideration, not published.
 compressed_path=data/file_features/under_consideration/compressed_boxes
-# Files above this hold media data for tens of megabytes, which framing never reads.
+# Files above this hold media data for tens of megabytes, which the tests of
+# the box structure never read.
 max_bytes=2000000
 destination=${1:?usage: $0 <directory>}
 

@@ -8,8 +8,8 @@ mod tests {
     use isobmff_core::{BoxHeader, BoxType};
     use isobmff_test_support::fixtures::written;
     use isobmff_test_support::{
-        compressed_box_conformance_files, conformance_files, gpac_children, gpac_frame, gpac_type,
-        tally,
+        compressed_box_conformance_files, conformance_files, gpac_children, gpac_type,
+        gpac_type_and_size, tally,
     };
 
     const FIXTURES: [(&str, &[u8]); 4] = [
@@ -619,7 +619,7 @@ mod tests {
     }
 
     #[test]
-    fn a_header_with_a_largesize_or_a_usertype_frames_its_box() {
+    fn a_header_with_a_largesize_or_a_usertype_delimits_its_box() {
         let large = [
             &1_u32.to_be_bytes()[..],
             b"free",
@@ -696,7 +696,7 @@ mod tests {
             let theirs = tally(
                 gpac_children(file.report.get("IsoMediaFile").unwrap())
                     .into_iter()
-                    .map(gpac_frame),
+                    .map(gpac_type_and_size),
             );
             if ours != theirs {
                 differences.push(format!(

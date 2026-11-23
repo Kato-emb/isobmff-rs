@@ -219,7 +219,7 @@ mod tests {
     }
 
     #[test]
-    fn a_count_beyond_the_entries_framed_is_refused() {
+    fn a_count_beyond_the_entries_the_payload_holds_is_refused() {
         let bytes = [b"\0\0\0\x0c\0\0\0\x02".as_slice(), URL, b"\0\0\0\x00"].concat();
 
         assert_eq!(

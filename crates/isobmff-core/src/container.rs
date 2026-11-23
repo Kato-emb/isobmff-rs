@@ -3,19 +3,19 @@
 use alloc::vec::Vec;
 
 use crate::any_box::AnyBox;
+use crate::box_structure::box_type::BoxType;
+use crate::box_structure::raw_box::{Boxes, RawBox};
 use crate::codec::box_decode::BoxDecode;
 use crate::codec::box_definition::BoxDefinition;
 use crate::codec::box_variants::BoxVariants;
 use crate::error::Error;
-use crate::framing::box_type::BoxType;
-use crate::framing::raw_box::{Boxes, RawBox};
 
 /// Children of a container, from which its fields are taken
 ///
 /// A container collects every child its payload holds here with
-/// [`decode`](Self::decode), as the bytes they were framed as, and takes each
-/// field out by the quantity the Definition subclause of ISO/IEC 14496-12
-/// states for it: [`take_exactly_one`](Self::take_exactly_one),
+/// [`decode`](Self::decode), as they lie in the payload, and takes each field
+/// out by the quantity the Definition subclause of ISO/IEC 14496-12 states for
+/// it: [`take_exactly_one`](Self::take_exactly_one),
 /// [`take_zero_or_one`](Self::take_zero_or_one),
 /// [`take_one_or_more`](Self::take_one_or_more),
 /// [`take_zero_or_more`](Self::take_zero_or_more). Each takes out the children
@@ -97,7 +97,7 @@ impl<'payload> ChildBoxes<'payload> {
     /// # Errors
     ///
     /// * The failures of [`RawBox::split_first`], for the first child that
-    ///   does not frame.
+    ///   cannot be split off.
     pub fn decode(payload: &'payload [u8]) -> Result<Self, Error> {
         // Why not collect in one pass: a `Vec` grown as it is filled holds spare
         // capacity beyond the children, which the bound above does not allow.
@@ -435,7 +435,7 @@ impl OtherBoxes {
 }
 
 impl From<ChildBoxes<'_>> for OtherBoxes {
-    /// Keeps the children no take removed, copying each payload out of the input it was framed from
+    /// Keeps the children no take removed, copying each payload out of the input it lies in
     fn from(children: ChildBoxes<'_>) -> Self {
         Self {
             children: children
@@ -456,13 +456,13 @@ mod tests {
 
     use super::{ChildBoxes, OtherBoxes};
     use crate::any_box::AnyBox;
+    use crate::box_structure::box_type::BoxType;
+    use crate::box_structure::raw_box::RawBox;
     use crate::codec::box_decode::BoxDecode;
     use crate::codec::box_definition::BoxDefinition;
     use crate::codec::box_variants::BoxVariants;
     use crate::codec::field::FieldReader;
     use crate::error::Error;
-    use crate::framing::box_type::BoxType;
-    use crate::framing::raw_box::RawBox;
 
     /// Box whose payload is one 32-bit sequence number
     #[derive(PartialEq, Debug)]
@@ -494,7 +494,7 @@ mod tests {
     }
 
     #[test]
-    fn a_payload_holding_a_child_that_does_not_frame_is_refused() {
+    fn a_payload_holding_a_child_that_overruns_it_is_refused() {
         assert_eq!(
             ChildBoxes::decode(b"\0\0\0\x0csqnc\0\0\0\x07\0\0\0\x10free").map(|_| ()),
             Err(Error::truncated_box(16, 8))

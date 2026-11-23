@@ -1,8 +1,8 @@
 //! [`BoxVariants`], a child of a container that one of several box types writes
 
+use crate::box_structure::box_type::BoxType;
+use crate::box_structure::raw_box::RawBox;
 use crate::error::Error;
-use crate::framing::box_type::BoxType;
-use crate::framing::raw_box::RawBox;
 
 /// Child of a container written by one of the variants of a box, of which the container holds one
 ///

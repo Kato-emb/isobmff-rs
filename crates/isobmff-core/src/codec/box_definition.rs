@@ -1,6 +1,6 @@
 //! [`BoxDefinition`], the box type a Definition subclause assigns
 
-use crate::framing::box_type::BoxType;
+use crate::box_structure::box_type::BoxType;
 
 /// Box type the specification assigns to `Self`
 ///

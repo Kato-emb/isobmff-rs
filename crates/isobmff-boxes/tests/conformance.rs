@@ -48,8 +48,8 @@ mod tests {
 
     /// Reads `payload` as a `Box` and returns the payload it writes back
     ///
-    /// The payload is compared rather than the whole box: the size form a box
-    /// was framed under, such as a size of zero running to the end of the
+    /// The payload is compared rather than the whole box: the form of the size
+    /// in the header of a box, such as a size of zero running to the end of the
     /// file, is not a value the box holds.
     fn written_back<Box: BoxDecode + BoxEncode>(payload: &[u8]) -> Result<Vec<u8>, Error> {
         let read = Box::decode_payload(payload)?;
@@ -124,8 +124,8 @@ mod tests {
     pub(super) fn read_all<Box: BoxDecode + BoxDefinition>(boxes: &[RawBox<'_>]) -> Vec<Box> {
         boxes
             .iter()
-            .filter(|framed| framed.header().box_type() == Box::BOX_TYPE)
-            .map(|framed| Box::decode_payload(framed.payload()).unwrap())
+            .filter(|raw_box| raw_box.header().box_type() == Box::BOX_TYPE)
+            .map(|raw_box| Box::decode_payload(raw_box.payload()).unwrap())
             .collect()
     }
 
@@ -161,15 +161,15 @@ mod tests {
     fn every_top_level_box_with_a_type_writes_back_the_payload_it_was_read_from() {
         let mut differences = Vec::new();
         for ConformanceFile { name, bytes, .. } in conformance_files() {
-            for framed in top_level(&bytes) {
-                let box_type = framed.header().box_type();
+            for raw_box in top_level(&bytes) {
+                let box_type = raw_box.header().box_type();
                 let Some((_, written_back)) =
                     TOP_LEVEL.iter().find(|(known, _)| *known == box_type)
                 else {
                     continue;
                 };
-                match written_back(framed.payload()) {
-                    Ok(written) if written == framed.payload() => {}
+                match written_back(raw_box.payload()) {
+                    Ok(written) if written == raw_box.payload() => {}
                     Ok(_) => {
                         differences.push(format!("{name}: {box_type} writes back other bytes"))
                     }
@@ -876,18 +876,18 @@ mod tests {
     /// Returns the file `bytes` with each of its top-level boxes that has a type here read and written back
     fn with_boxes_written_back(bytes: &[u8]) -> Result<Vec<u8>, Error> {
         let mut written = Vec::with_capacity(bytes.len());
-        for framed in top_level(bytes) {
-            let box_type = framed.header().box_type();
-            let mut header = vec![0; usize::try_from(framed.header().encoded_len()).unwrap()];
-            framed.header().encode(&mut header)?;
+        for raw_box in top_level(bytes) {
+            let box_type = raw_box.header().box_type();
+            let mut header = vec![0; usize::try_from(raw_box.header().encoded_len()).unwrap()];
+            raw_box.header().encode(&mut header)?;
             written.extend(header);
             match CONTAINERS
                 .iter()
                 .chain(&TOP_LEVEL)
                 .find(|(known, _)| *known == box_type)
             {
-                Some((_, written_back)) => written.extend(written_back(framed.payload())?),
-                None => written.extend(framed.payload()),
+                Some((_, written_back)) => written.extend(written_back(raw_box.payload())?),
+                None => written.extend(raw_box.payload()),
             }
         }
 
@@ -899,15 +899,15 @@ mod tests {
     fn every_top_level_container_writes_back_every_box_it_was_read_from() {
         let mut differences = Vec::new();
         for ConformanceFile { name, bytes, .. } in conformance_files() {
-            for framed in top_level(&bytes) {
-                let box_type = framed.header().box_type();
+            for raw_box in top_level(&bytes) {
+                let box_type = raw_box.header().box_type();
                 let Some((_, written_back)) =
                     CONTAINERS.iter().find(|(known, _)| *known == box_type)
                 else {
                     continue;
                 };
-                match written_back(framed.payload()) {
-                    Ok(written) if same_container(box_type, framed.payload(), &written) => {}
+                match written_back(raw_box.payload()) {
+                    Ok(written) if same_container(box_type, raw_box.payload(), &written) => {}
                     Ok(_) => {
                         differences.push(format!("{name}: {box_type} writes back other boxes"))
                     }
@@ -1717,15 +1717,15 @@ mod tests {
     /// Returns the file `bytes` with each sample entry of its `moov`s read into its class and written back
     fn with_sample_entries_written_through_their_classes(bytes: &[u8]) -> Result<Vec<u8>, Error> {
         let mut written = Vec::with_capacity(bytes.len());
-        for framed in top_level(bytes) {
-            if framed.header().box_type() != MovieBox::BOX_TYPE {
-                let mut header = vec![0; usize::try_from(framed.header().encoded_len()).unwrap()];
-                framed.header().encode(&mut header)?;
+        for raw_box in top_level(bytes) {
+            if raw_box.header().box_type() != MovieBox::BOX_TYPE {
+                let mut header = vec![0; usize::try_from(raw_box.header().encoded_len()).unwrap()];
+                raw_box.header().encode(&mut header)?;
                 written.extend(header);
-                written.extend(framed.payload());
+                written.extend(raw_box.payload());
                 continue;
             }
-            let mut movie = MovieBox::decode_payload(framed.payload())?;
+            let mut movie = MovieBox::decode_payload(raw_box.payload())?;
             for track in &mut movie.trak {
                 let handler_type = track.mdia.hdlr.handler_type;
                 for description in &mut track.mdia.minf.stbl.stsd.sample_descriptions {
