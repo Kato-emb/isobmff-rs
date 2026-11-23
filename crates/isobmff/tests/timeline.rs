@@ -66,10 +66,23 @@ mod tests {
                         file.name
                     ));
                 }
+                // Why hold the time base against the timescale: durations
+                // counted in another unit would disagree without saying why.
+                let timescale = u64::from(trak.mdia.mdhd.timescale);
+                if let Some(packet) = packets.iter().find(|packet| packet.track_id == track_id) {
+                    let (numerator, denominator) = packet.time_base;
+                    if timescale.saturating_mul(numerator) != denominator {
+                        differences.push(format!(
+                            "{} track {track_id}: timescale {timescale}, ffprobe time base {numerator}/{denominator}",
+                            file.name
+                        ));
+                    }
+                }
                 tracks += 1;
             }
         }
         println!("compared {tracks} tracks");
         assert_eq!(differences, Vec::<String>::new());
+        assert!(tracks > 0, "no track was compared");
     }
 }

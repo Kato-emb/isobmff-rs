@@ -678,8 +678,10 @@ mod tests {
             if !ffprobe(&["-v", "error"], path).status.success() {
                 continue;
             }
-            let mut packets = BTreeMap::<u32, Vec<(i64, i64)>>::new();
+            let (mut packets, mut time_bases) =
+                (BTreeMap::<u32, Vec<(i64, i64)>>::new(), BTreeMap::new());
             for packet in ffprobe_packets(&["-ignore_editlist", "1"], path) {
+                time_bases.insert(packet.track_id, packet.time_base);
                 if let (Some(dts), Some(pts)) = (packet.dts, packet.pts) {
                     packets.entry(packet.track_id).or_default().push((dts, pts));
                 }
@@ -744,11 +746,22 @@ mod tests {
                         theirs.get(sample)
                     ));
                 }
+                // Why hold the time base against the timescale: a time
+                // counted in another unit could agree up to the shift alone.
+                let timescale = u64::from(trak.mdia.mdhd.timescale);
+                if let Some(&(numerator, denominator)) = time_bases.get(&track_id)
+                    && timescale.saturating_mul(numerator) != denominator
+                {
+                    differences.push(format!(
+                        "{name} track {track_id}: timescale {timescale}, ffprobe time base {numerator}/{denominator}"
+                    ));
+                }
                 tracks += 1;
                 samples += compared;
             }
         }
         std::println!("compared {tracks} tracks, {samples} samples");
         assert_eq!(differences, Vec::<String>::new());
+        assert!(tracks > 0 && samples > 0, "no track was compared");
     }
 }
