@@ -243,25 +243,42 @@ pub(super) fn table_sample_counts(
 
 /// Refuses a sync sample table of track `track_id` whose entries do not go up strictly, or name a sample past `sample_count`
 ///
+/// Each entry is checked against the samples first, then against the entry
+/// before it, so an entry that fails both is reported out of range.
+///
 /// # Errors
 ///
-/// * [`InvalidEntry`](Error::InvalidEntry): the first entry that is not after
-///   the one before it, or names no sample, ISO/IEC 14496-12 §8.6.2.3.
+/// * [`SyncSampleNumberOutOfRange`](Error::SyncSampleNumberOutOfRange): the
+///   first entry whose `sample_number` is 0 or past `sample_count`, ISO/IEC
+///   14496-12 §8.6.2.3.
+/// * [`SyncSampleNumberNotIncreasing`](Error::SyncSampleNumberNotIncreasing):
+///   the first entry whose `sample_number` is not after that of the entry
+///   before it, §8.6.2.1.
 pub(super) fn check_sync_samples(
     stss: &SyncSampleBox,
     sample_count: u32,
     track_id: u32,
 ) -> Result<(), Error> {
-    let mut previous = 0;
+    let mut previous_sample_number = 0;
     for (entry, &sample_number) in stss.sample_numbers.iter().enumerate() {
-        if sample_number <= previous || sample_number > sample_count {
-            return Err(Error::InvalidEntry {
+        let entry = u64::try_from(entry).unwrap_or(u64::MAX);
+        if sample_number == 0 || sample_number > sample_count {
+            return Err(Error::SyncSampleNumberOutOfRange {
                 track_id,
-                box_type: SyncSampleBox::BOX_TYPE,
-                entry: u64::try_from(entry).unwrap_or(u64::MAX),
+                entry,
+                sample_number,
+                sample_count,
             });
         }
-        previous = sample_number;
+        if sample_number <= previous_sample_number {
+            return Err(Error::SyncSampleNumberNotIncreasing {
+                track_id,
+                entry,
+                sample_number,
+                previous_sample_number,
+            });
+        }
+        previous_sample_number = sample_number;
     }
     Ok(())
 }
@@ -606,18 +623,47 @@ mod tests {
     }
 
     #[test]
-    fn a_sync_sample_number_not_after_the_one_before_or_past_the_samples_is_refused() {
-        let refused = |entry| {
-            Err(Error::InvalidEntry {
+    fn a_sync_sample_number_that_names_no_sample_or_is_not_after_the_one_before_is_refused() {
+        let out_of_range = |entry, sample_number| {
+            Err(Error::SyncSampleNumberOutOfRange {
                 track_id: 7,
-                box_type: SyncSampleBox::BOX_TYPE,
                 entry,
+                sample_number,
+                sample_count: 5,
+            })
+        };
+        let not_increasing = |entry, sample_number, previous_sample_number| {
+            Err(Error::SyncSampleNumberNotIncreasing {
+                track_id: 7,
+                entry,
+                sample_number,
+                previous_sample_number,
             })
         };
         assert_eq!(check_sync_samples(&stss(&[1, 3, 5]), 5, 7), Ok(()));
-        assert_eq!(check_sync_samples(&stss(&[1, 3, 3]), 5, 7), refused(2));
-        assert_eq!(check_sync_samples(&stss(&[0]), 5, 7), refused(0));
-        assert_eq!(check_sync_samples(&stss(&[2, 6]), 5, 7), refused(1));
+        assert_eq!(check_sync_samples(&stss(&[0]), 5, 7), out_of_range(0, 0));
+        assert_eq!(check_sync_samples(&stss(&[3, 9]), 5, 7), out_of_range(1, 9));
+        assert_eq!(
+            check_sync_samples(&stss(&[3, 2]), 5, 7),
+            not_increasing(1, 2, 3)
+        );
+        assert_eq!(
+            check_sync_samples(&stss(&[3, 3]), 5, 7),
+            not_increasing(1, 3, 3)
+        );
+    }
+
+    #[test]
+    fn a_sync_sample_number_out_of_range_and_not_after_the_one_before_is_reported_out_of_range() {
+        assert_eq!(
+            check_sync_samples(&stss(&[5, 0]), 5, 7),
+            Err(Error::SyncSampleNumberOutOfRange {
+                track_id: 7,
+                entry: 1,
+                sample_number: 0,
+                sample_count: 5,
+            })
+        );
     }
 
     #[test]
