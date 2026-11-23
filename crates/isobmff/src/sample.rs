@@ -5,8 +5,6 @@ use isobmff_boxes::SampleFlags;
 /// What the structure-data declares of a `sample`, apart from where its bytes lie
 ///
 /// The `sample`, ISO/IEC 14496-12 §3.1.45, as a sample table, §8.5, or a track fragment, §8.8.6, declares it
-///
-/// The fields are those a sample table or a track fragment gives a sample.
 #[expect(
     clippy::exhaustive_structs,
     reason = "a caller of a writer builds one, and the fields are those a sample table or a track fragment declares of a sample"
@@ -64,9 +62,8 @@ pub struct SampleLocation {
 ///
 /// The `data origin`, ISO/IEC 14496-12 §6.1 Table 1, and §8.8.7.1 Table 6 for a track fragment
 ///
-/// Table 1 gives the origins of the data offsets of samples and items, and
-/// these are those of samples; for a track fragment, Table 6 derives which
-/// applies.
+/// Table 1 gives the origins of the data offsets of items too; these are
+/// those of samples alone.
 // Why not let a caller match every variant: the origins are those a version of
 // the specification sets, and the structure-data resolves them in one place.
 #[non_exhaustive]
