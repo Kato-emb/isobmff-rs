@@ -15,6 +15,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::{env, fs};
 
+use isobmff_boxes::MovieBox;
+use isobmff_core::{BoxDecode, BoxDefinition, Boxes};
 pub use serde_json;
 use serde_json::Value;
 
@@ -30,6 +32,28 @@ pub struct ConformanceFile {
     pub bytes: Vec<u8>,
     /// GPAC's report of the file, which `IsoMediaFile` opens
     pub report: Value,
+}
+
+impl ConformanceFile {
+    /// Returns the `moov` of the file, the [`MovieBox`] at file level read into its value, or `None` for a file without one
+    ///
+    /// # Panics
+    ///
+    /// * The `moov` does not decode: a test reading it fails, naming the file.
+    #[must_use]
+    #[expect(
+        clippy::panic,
+        reason = "a test reading a moov that does not decode fails"
+    )]
+    pub fn movie_box(&self) -> Option<MovieBox> {
+        let moov = Boxes::new(&self.bytes)
+            .map_while(Result::ok)
+            .find(|raw_box| raw_box.header().box_type() == MovieBox::BOX_TYPE)?;
+        Some(
+            MovieBox::decode_payload(moov.payload())
+                .unwrap_or_else(|error| panic!("{}: the moov does not decode: {error}", self.name)),
+        )
+    }
 }
 
 /// Returns the conformance files in the directory `ISOBMFF_CONFORMANCE_DIR` names, in the order of their names

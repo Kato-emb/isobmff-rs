@@ -2,8 +2,10 @@
 //!
 //! The `moov` and `moof` of a file declare its samples in tables, ISO/IEC
 //! 14496-12 §3.1.54. [`timeline`] reads when the samples of a sample table
-//! are decoded and composed, and how long they last.
+//! are decoded and composed, and how long they last; [`data_layout`] where
+//! their bytes lie, and which data reference entry specifies their container.
 
+pub mod data_layout;
 mod error;
 pub mod timeline;
 
