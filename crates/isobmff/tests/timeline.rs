@@ -2,9 +2,7 @@
 
 #[cfg(test)]
 mod tests {
-    use isobmff::boxes::MovieBox;
     use isobmff::structure_data::timeline::{composition_end, media_duration};
-    use isobmff::{BoxDecode, BoxDefinition, Boxes};
     use isobmff_test_support::{conformance_files, ffprobe, ffprobe_packets};
 
     #[test]
@@ -12,11 +10,7 @@ mod tests {
     fn the_media_lasts_and_is_composed_until_when_the_packets_ffprobe_reads_do() {
         let (mut tracks, mut differences) = (0, Vec::<String>::new());
         for file in conformance_files() {
-            let Some(moov) = Boxes::new(&file.bytes)
-                .map_while(Result::ok)
-                .find(|raw_box| raw_box.header().box_type() == MovieBox::BOX_TYPE)
-                .and_then(|moov| MovieBox::decode_payload(moov.payload()).ok())
-            else {
+            let Some(moov) = file.movie_box() else {
                 continue;
             };
             if !ffprobe(&["-v", "error"], &file.path).status.success() {

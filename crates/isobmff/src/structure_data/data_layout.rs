@@ -166,11 +166,12 @@ pub(super) fn sample_framings<'a>(
 ) -> SampleFramings<'a> {
     SampleFramings {
         sample_to_chunk: &stsc.entries,
-        chunk_offsets: ChunkOffsets::new(chunk_offset),
+        chunk_offsets: ChunkOffsets::new(chunk_offset)
+            .unwrap_or(ChunkOffsets::ChunkOffset([].iter())),
         chunk_number: 0,
         remaining: 0,
         offset: 0,
-        entry_sizes: EntrySizes::new(sample_size),
+        entry_sizes: EntrySizes::new(sample_size).unwrap_or(EntrySizes::Table([].iter())),
         sample_count,
     }
 }
@@ -250,14 +251,24 @@ enum ChunkOffsets<'a> {
 }
 
 impl<'a> ChunkOffsets<'a> {
-    /// The offsets of `chunk_offset`, or none for a variant this crate does not read
-    fn new(chunk_offset: &'a ChunkOffsetVariant) -> Self {
+    /// The offsets of `chunk_offset`, or `None` for a variant this crate does not read
+    fn new(chunk_offset: &'a ChunkOffsetVariant) -> Option<Self> {
         match chunk_offset {
-            ChunkOffsetVariant::ChunkOffset(stco) => Self::ChunkOffset(stco.chunk_offsets.iter()),
-            ChunkOffsetVariant::ChunkLargeOffset(co64) => {
-                Self::ChunkLargeOffset(co64.chunk_offsets.iter())
+            ChunkOffsetVariant::ChunkOffset(stco) => {
+                Some(Self::ChunkOffset(stco.chunk_offsets.iter()))
             }
-            _ => Self::ChunkOffset([].iter()),
+            ChunkOffsetVariant::ChunkLargeOffset(co64) => {
+                Some(Self::ChunkLargeOffset(co64.chunk_offsets.iter()))
+            }
+            _ => None,
+        }
+    }
+
+    /// Number of the chunks not yet taken
+    fn chunk_count(&self) -> u32 {
+        match self {
+            Self::ChunkOffset(offsets) => count(offsets.len()),
+            Self::ChunkLargeOffset(offsets) => count(offsets.len()),
         }
     }
 }
@@ -276,21 +287,43 @@ impl Iterator for ChunkOffsets<'_> {
 /// The size of each sample, from the `entry_size`s of a sample size table, or the `sample_size` it gives every sample in their stead, ISO/IEC 14496-12 §8.7.3
 #[derive(Debug, Clone)]
 enum EntrySizes<'a> {
-    Constant(u32),
+    Constant {
+        sample_size: u32,
+        /// Number of the samples not yet taken
+        // Why not `iter::repeat_n`: its length is a `usize`, which a target of
+        // 16 bits cannot hold every `u32` `sample_count` in.
+        sample_count: u32,
+    },
     Table(slice::Iter<'a, u32>),
 }
 
 impl<'a> EntrySizes<'a> {
-    /// The sizes `sample_size` gives, or none for a variant this crate does not read
-    fn new(sample_size: &'a SampleSizeVariant) -> Self {
+    /// The sizes `sample_size` gives, or `None` for a variant this crate does not read
+    fn new(sample_size: &'a SampleSizeVariant) -> Option<Self> {
         match sample_size {
             SampleSizeVariant::SampleSize(stsz) => match &stsz.sample_sizes {
-                SampleSizes::Constant { sample_size, .. } => Self::Constant(sample_size.get()),
-                SampleSizes::Table { entry_sizes } => Self::Table(entry_sizes.iter()),
-                _ => Self::Table([].iter()),
+                SampleSizes::Constant {
+                    sample_size,
+                    sample_count,
+                } => Some(Self::Constant {
+                    sample_size: sample_size.get(),
+                    sample_count: *sample_count,
+                }),
+                SampleSizes::Table { entry_sizes } => Some(Self::Table(entry_sizes.iter())),
+                _ => None,
             },
-            SampleSizeVariant::CompactSampleSize(stz2) => Self::Table(stz2.entry_sizes.iter()),
-            _ => Self::Table([].iter()),
+            SampleSizeVariant::CompactSampleSize(stz2) => {
+                Some(Self::Table(stz2.entry_sizes.iter()))
+            }
+            _ => None,
+        }
+    }
+
+    /// Number of the sizes not yet taken
+    fn sample_count(&self) -> u32 {
+        match self {
+            Self::Constant { sample_count, .. } => *sample_count,
+            Self::Table(sizes) => count(sizes.len()),
         }
     }
 }
@@ -300,7 +333,13 @@ impl Iterator for EntrySizes<'_> {
 
     fn next(&mut self) -> Option<u32> {
         match self {
-            Self::Constant(size) => Some(*size),
+            Self::Constant {
+                sample_size,
+                sample_count,
+            } => {
+                *sample_count = sample_count.checked_sub(1)?;
+                Some(*sample_size)
+            }
             Self::Table(sizes) => sizes.next().copied(),
         }
     }
@@ -317,15 +356,7 @@ impl Iterator for EntrySizes<'_> {
     )
 )]
 pub(super) fn sample_count(sample_size: &SampleSizeVariant) -> Option<u32> {
-    match sample_size {
-        SampleSizeVariant::SampleSize(stsz) => match &stsz.sample_sizes {
-            SampleSizes::Constant { sample_count, .. } => Some(*sample_count),
-            SampleSizes::Table { entry_sizes } => Some(count(entry_sizes.len())),
-            _ => None,
-        },
-        SampleSizeVariant::CompactSampleSize(stz2) => Some(count(stz2.entry_sizes.len())),
-        _ => None,
-    }
+    EntrySizes::new(sample_size).map(|sizes| sizes.sample_count())
 }
 
 /// Returns the number of chunks `chunk_offset` gives, or `None` for a variant this crate does not read
@@ -339,11 +370,7 @@ pub(super) fn sample_count(sample_size: &SampleSizeVariant) -> Option<u32> {
     )
 )]
 pub(super) fn chunk_count(chunk_offset: &ChunkOffsetVariant) -> Option<u32> {
-    match chunk_offset {
-        ChunkOffsetVariant::ChunkOffset(stco) => Some(count(stco.chunk_offsets.len())),
-        ChunkOffsetVariant::ChunkLargeOffset(co64) => Some(count(co64.chunk_offsets.len())),
-        _ => None,
-    }
+    ChunkOffsets::new(chunk_offset).map(|offsets| offsets.chunk_count())
 }
 
 /// Returns the number of samples the `chunk_count` chunks hold, as the runs of chunks of `stsc` give them, or `u64::MAX` past what a `u64` counts
@@ -356,8 +383,8 @@ pub(super) fn chunk_count(chunk_offset: &ChunkOffsetVariant) -> Option<u32> {
 /// none either.
 ///
 /// For a table [`check_sample_to_chunk`] lets through, this is the number of
-/// samples [`sample_framings`] returns, where the sizes do not run out
-/// first.
+/// samples [`sample_framings`] returns when the sizes and `sample_count`
+/// cover all the samples and no sample's end offset exceeds `u64::MAX`.
 #[cfg_attr(
     not(test),
     expect(
@@ -449,10 +476,10 @@ mod tests {
     use isobmff_boxes::{
         ChunkLargeOffsetBox, ChunkOffsetBox, ChunkOffsetVariant, CompactSampleSizeBox, DataEntry,
         DataEntryImdaBox, DataEntrySeqNumImdaBox, DataEntryUrlBox, DataEntryUrnBox,
-        DataReferenceBox, MovieBox, SampleDescription, SampleDescriptionBox, SampleEntry,
-        SampleSizeBox, SampleSizeVariant, SampleSizes, SampleToChunkBox, SampleToChunkEntry,
+        DataReferenceBox, SampleDescription, SampleDescriptionBox, SampleEntry, SampleSizeBox,
+        SampleSizeVariant, SampleSizes, SampleToChunkBox, SampleToChunkEntry,
     };
-    use isobmff_core::{AnyBox, BoxDecode, BoxDefinition, BoxType, Boxes, FourCc, Utf8String};
+    use isobmff_core::{AnyBox, BoxType, FourCc, Utf8String};
     use isobmff_test_support::{conformance_files, ffprobe, ffprobe_packets};
 
     use crate::DataOrigin;
@@ -574,6 +601,10 @@ mod tests {
         assert_eq!(count(&runs, &chunks, &[1; 2], 9), 2);
         assert_eq!(count(&stsc(&[]), &chunks, &[1; 4], 4), 0);
         assert_eq!(count(&runs, &chunks, &[1; 4], 0), 0);
+        assert_eq!(
+            sample_framings(&runs, &chunks, &constant(1, 2), 9).count(),
+            2
+        );
     }
 
     #[test]
@@ -780,11 +811,7 @@ mod tests {
         let (mut tracks, mut samples, mut differences) = (0, 0, Vec::<String>::new());
         let mut left_out = BTreeMap::<&str, usize>::new();
         for file in conformance_files() {
-            let Some(moov) = Boxes::new(&file.bytes)
-                .map_while(Result::ok)
-                .find(|raw_box| raw_box.header().box_type() == MovieBox::BOX_TYPE)
-                .and_then(|moov| MovieBox::decode_payload(moov.payload()).ok())
-            else {
+            let Some(moov) = file.movie_box() else {
                 continue;
             };
             let (name, path) = (&file.name, &file.path);
@@ -844,11 +871,10 @@ mod tests {
                         .or_default() += 1;
                     continue;
                 }
-                let Some(theirs) = packets.get(&track_id).filter(|theirs| !theirs.is_empty())
-                else {
-                    *left_out.entry("ffprobe reads no packet of").or_default() += 1;
-                    continue;
-                };
+                let theirs = packets
+                    .get(&track_id)
+                    .map(Vec::as_slice)
+                    .unwrap_or_default();
                 let ours = sample_framings(stsc, chunk_offset, sample_size, sample_count)
                     .map(|framing| (framing.offset, u64::from(framing.size)))
                     .collect::<Vec<_>>();
@@ -866,13 +892,18 @@ mod tests {
                         theirs.get(sample)
                     ));
                 }
+                let declared = usize::try_from(sample_count).unwrap();
+                if ours.len() != declared {
+                    differences.push(format!(
+                        "{name} track {track_id}: {} samples placed of the {declared} declared",
+                        ours.len()
+                    ));
+                }
                 // Why let ffprobe read more packets in a fragmented file
                 // alone: those are the samples of its movie fragments.
-                if ours.len() > theirs.len() || (moov.mvex.is_none() && ours.len() != theirs.len())
-                {
+                if theirs.len() < declared || (moov.mvex.is_none() && theirs.len() != declared) {
                     differences.push(format!(
-                        "{name} track {track_id}: {} samples, ffprobe {} packets",
-                        ours.len(),
+                        "{name} track {track_id}: {declared} samples declared, ffprobe {} packets",
                         theirs.len()
                     ));
                 }

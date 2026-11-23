@@ -395,11 +395,11 @@ mod tests {
     use alloc::vec::Vec;
 
     use isobmff_boxes::{
-        CompositionOffsetBox, CompositionOffsetEntry, MovieBox, SampleDependencyTypeBox,
+        CompositionOffsetBox, CompositionOffsetEntry, SampleDependencyTypeBox,
         SampleDependencyTypeEntry, SampleFlags, SampleSizeVariant, SampleSizes, SampleTableBox,
         SyncSampleBox, TimeToSampleBox, TimeToSampleEntry,
     };
-    use isobmff_core::{BoxDecode, BoxDefinition, Boxes};
+    use isobmff_core::BoxDefinition;
     use isobmff_test_support::{conformance_files, ffprobe, ffprobe_packets};
 
     use super::{
@@ -667,11 +667,7 @@ mod tests {
     {
         let (mut tracks, mut samples, mut differences) = (0, 0, Vec::<String>::new());
         for file in conformance_files() {
-            let Some(moov) = Boxes::new(&file.bytes)
-                .map_while(Result::ok)
-                .find(|raw_box| raw_box.header().box_type() == MovieBox::BOX_TYPE)
-                .and_then(|moov| MovieBox::decode_payload(moov.payload()).ok())
-            else {
+            let Some(moov) = file.movie_box() else {
                 continue;
             };
             let (name, path) = (&file.name, &file.path);

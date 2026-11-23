@@ -4,11 +4,11 @@
 mod tests {
     use isobmff::boxes::{
         DataEntry, DataEntryImdaBox, DataEntrySeqNumImdaBox, DataEntryUrlBox, DataEntryUrnBox,
-        DataReferenceBox, MovieBox, SampleDescription, SampleDescriptionBox, SampleEntry,
+        DataReferenceBox, SampleDescription, SampleDescriptionBox, SampleEntry,
     };
     use isobmff::structure_data::Error;
     use isobmff::structure_data::data_layout::data_entry;
-    use isobmff::{AnyBox, BoxDecode, BoxDefinition, BoxType, Boxes, FourCc, Utf8String};
+    use isobmff::{AnyBox, BoxType, FourCc, Utf8String};
     use isobmff_test_support::{conformance_files, gpac_children, gpac_list};
 
     /// `stsd` of sample entries of the `data_reference_index`es `data_reference_indexes`
@@ -137,11 +137,7 @@ mod tests {
         let (mut tracks, mut sample_entries, mut left_out) = (0, 0, 0);
         let mut differences = Vec::<String>::new();
         for file in conformance_files() {
-            let Some(moov) = Boxes::new(&file.bytes)
-                .map_while(Result::ok)
-                .find(|raw_box| raw_box.header().box_type() == MovieBox::BOX_TYPE)
-                .and_then(|moov| MovieBox::decode_payload(moov.payload()).ok())
-            else {
+            let Some(moov) = file.movie_box() else {
                 continue;
             };
             let gpac_tracks = file
