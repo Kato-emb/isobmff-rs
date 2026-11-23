@@ -2,7 +2,7 @@
 //!
 //! The data reference table (`dref`), ISO/IEC 14496-12 §8.7.2, lists the
 //! containers of the media data of a track; the `data_reference_index` of a
-//! sample entry names one of them. [`data_entry`] looks that entry up.
+//! sample entry names one of them.
 
 use isobmff_boxes::{DataEntry, DataReferenceBox, SampleDescriptionBox};
 

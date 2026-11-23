@@ -1,4 +1,4 @@
-//! The framing of the samples of a sample table: the chunk each lies in, its offset there and its size
+//! The framing of the samples of a sample table: the chunk each lies in, its data offset and its size
 //!
 //! The sample-to-chunk table (`stsc`), the chunk offset table (`stco` or
 //! `co64`) and the sample size table (`stsz` or `stz2`), ISO/IEC 14496-12
