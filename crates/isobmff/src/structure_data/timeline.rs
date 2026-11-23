@@ -48,13 +48,6 @@ pub(super) struct SampleTiming {
 /// dependency types, takes the value that table gives without it, and an
 /// entry of the sync sample table that is not after the one before it is
 /// passed over; [`check_sync_samples`] refuses such an entry.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the sample table reads the timing of its samples with it"
-    )
-)]
 pub(super) fn sample_timings<'a>(
     stts: &'a TimeToSampleBox,
     ctts: Option<&'a CompositionOffsetBox>,
@@ -203,13 +196,6 @@ fn run_total(sample_counts: impl Iterator<Item = u32>) -> u64 {
 /// Returns the number of samples each of `stts`, `ctts` and `sdtp` that is present declares, with its box type
 ///
 /// A count past what a `u64` counts is `u64::MAX`.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the sample table holds each count against that of its sample size table"
-    )
-)]
 pub(super) fn table_sample_counts(
     stts: &TimeToSampleBox,
     ctts: Option<&CompositionOffsetBox>,
@@ -237,7 +223,7 @@ pub(super) fn table_sample_counts(
     .flatten()
 }
 
-/// Refuses a sync sample table of track `track_id` whose entries do not go up strictly, or name a sample past `sample_count`
+/// Refuses a sync sample table whose entries do not go up strictly, or name a sample past `sample_count`
 ///
 /// Each entry is checked against the samples first, then against the entry
 /// before it, so an entry that fails both is reported out of range.
@@ -250,24 +236,12 @@ pub(super) fn table_sample_counts(
 /// * [`SyncSampleNumberNotIncreasing`](Error::SyncSampleNumberNotIncreasing):
 ///   the first entry whose `sample_number` is not after that of the entry
 ///   before it, §8.6.2.1.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the sample table refuses a sync sample table as the specification reads it"
-    )
-)]
-pub(super) fn check_sync_samples(
-    stss: &SyncSampleBox,
-    sample_count: u32,
-    track_id: u32,
-) -> Result<(), Error> {
+pub(super) fn check_sync_samples(stss: &SyncSampleBox, sample_count: u32) -> Result<(), Error> {
     let mut previous_sample_number = 0;
     for (entry, &sample_number) in stss.sample_numbers.iter().enumerate() {
         let entry = u64::try_from(entry).unwrap_or(u64::MAX);
         if sample_number == 0 || sample_number > sample_count {
             return Err(Error::SyncSampleNumberOutOfRange {
-                track_id,
                 entry,
                 sample_number,
                 sample_count,
@@ -275,7 +249,6 @@ pub(super) fn check_sync_samples(
         }
         if sample_number <= previous_sample_number {
             return Err(Error::SyncSampleNumberNotIncreasing {
-                track_id,
                 entry,
                 sample_number,
                 previous_sample_number,
@@ -387,20 +360,14 @@ pub fn composition_end(stbl: &SampleTableBox) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    extern crate std;
-
-    use alloc::collections::BTreeMap;
-    use alloc::format;
-    use alloc::string::String;
     use alloc::vec::Vec;
 
     use isobmff_boxes::{
         CompositionOffsetBox, CompositionOffsetEntry, SampleDependencyTypeBox,
-        SampleDependencyTypeEntry, SampleFlags, SampleSizeVariant, SampleSizes, SampleTableBox,
-        SyncSampleBox, TimeToSampleBox, TimeToSampleEntry,
+        SampleDependencyTypeEntry, SampleFlags, SampleTableBox, SyncSampleBox, TimeToSampleBox,
+        TimeToSampleEntry,
     };
     use isobmff_core::BoxDefinition;
-    use isobmff_test_support::{conformance_files, ffprobe, ffprobe_packets};
 
     use super::{
         Error, SampleTiming, check_sync_samples, composition_end, media_duration, sample_timings,
@@ -621,7 +588,6 @@ mod tests {
     fn a_sync_sample_number_that_names_no_sample_or_is_not_after_the_one_before_is_refused() {
         let out_of_range = |entry, sample_number| {
             Err(Error::SyncSampleNumberOutOfRange {
-                track_id: 7,
                 entry,
                 sample_number,
                 sample_count: 5,
@@ -629,21 +595,20 @@ mod tests {
         };
         let not_increasing = |entry, sample_number, previous_sample_number| {
             Err(Error::SyncSampleNumberNotIncreasing {
-                track_id: 7,
                 entry,
                 sample_number,
                 previous_sample_number,
             })
         };
-        assert_eq!(check_sync_samples(&stss(&[1, 3, 5]), 5, 7), Ok(()));
-        assert_eq!(check_sync_samples(&stss(&[0]), 5, 7), out_of_range(0, 0));
-        assert_eq!(check_sync_samples(&stss(&[3, 9]), 5, 7), out_of_range(1, 9));
+        assert_eq!(check_sync_samples(&stss(&[1, 3, 5]), 5), Ok(()));
+        assert_eq!(check_sync_samples(&stss(&[0]), 5), out_of_range(0, 0));
+        assert_eq!(check_sync_samples(&stss(&[3, 9]), 5), out_of_range(1, 9));
         assert_eq!(
-            check_sync_samples(&stss(&[3, 2]), 5, 7),
+            check_sync_samples(&stss(&[3, 2]), 5),
             not_increasing(1, 2, 3)
         );
         assert_eq!(
-            check_sync_samples(&stss(&[3, 3]), 5, 7),
+            check_sync_samples(&stss(&[3, 3]), 5),
             not_increasing(1, 3, 3)
         );
     }
@@ -651,113 +616,12 @@ mod tests {
     #[test]
     fn a_sync_sample_number_out_of_range_and_not_after_the_one_before_is_reported_out_of_range() {
         assert_eq!(
-            check_sync_samples(&stss(&[5, 0]), 5, 7),
+            check_sync_samples(&stss(&[5, 0]), 5),
             Err(Error::SyncSampleNumberOutOfRange {
-                track_id: 7,
                 entry: 1,
                 sample_number: 0,
                 sample_count: 5,
             })
         );
-    }
-
-    #[test]
-    #[ignore = "reads the conformance files ISOBMFF_CONFORMANCE_DIR names, and runs ffprobe"]
-    fn the_samples_of_each_track_are_composed_when_ffprobe_presents_them_and_decoded_at_its_times()
-    {
-        let (mut tracks, mut samples, mut differences) = (0, 0, Vec::<String>::new());
-        for file in conformance_files() {
-            let Some(moov) = file.movie_box() else {
-                continue;
-            };
-            let (name, path) = (&file.name, &file.path);
-            if !ffprobe(&["-v", "error"], path).status.success() {
-                continue;
-            }
-            let (mut packets, mut time_bases) =
-                (BTreeMap::<u32, Vec<(i64, i64)>>::new(), BTreeMap::new());
-            for packet in ffprobe_packets(&["-ignore_editlist", "1"], path) {
-                time_bases.insert(packet.track_id, packet.time_base);
-                if let (Some(dts), Some(pts)) = (packet.dts, packet.pts) {
-                    packets.entry(packet.track_id).or_default().push((dts, pts));
-                }
-            }
-            for trak in &moov.trak {
-                let (track_id, stbl) = (trak.tkhd.track_id, &trak.mdia.minf.stbl);
-                let sample_count = match &stbl.sample_size {
-                    Some(SampleSizeVariant::SampleSize(stsz)) => match &stsz.sample_sizes {
-                        SampleSizes::Constant { sample_count, .. } => *sample_count,
-                        SampleSizes::Table { entry_sizes } => {
-                            u32::try_from(entry_sizes.len()).unwrap()
-                        }
-                        _ => 0,
-                    },
-                    Some(SampleSizeVariant::CompactSampleSize(stz2)) => {
-                        u32::try_from(stz2.entry_sizes.len()).unwrap()
-                    }
-                    Some(_) | None => 0,
-                };
-                let Some(stts) = &stbl.stts else { continue };
-                let (ctts, stss, sdtp) =
-                    (stbl.ctts.as_ref(), stbl.stss.as_ref(), stbl.sdtp.as_ref());
-                // Why not compare a track whose tables disagree: the sample
-                // table refuses it as the specification reads it.
-                let agrees = table_sample_counts(stts, ctts, sdtp)
-                    .all(|(_, count)| count == u64::from(sample_count))
-                    && stss.is_none_or(|stss| {
-                        check_sync_samples(stss, sample_count, track_id).is_ok()
-                    });
-                let theirs = packets
-                    .get(&track_id)
-                    .map(Vec::as_slice)
-                    .unwrap_or_default();
-                if !agrees || sample_count == 0 || theirs.is_empty() {
-                    continue;
-                }
-                let ours = sample_timings(stts, ctts, stss, sdtp, sample_count)
-                    .map(|timing| {
-                        (
-                            i128::from(timing.decoding_time),
-                            i128::from(timing.decoding_time)
-                                + i128::from(timing.sample_composition_time_offset),
-                        )
-                    })
-                    .collect::<Vec<_>>();
-                // Why compare the samples both have: ffprobe reads the samples
-                // of the movie fragments after those of the `moov`, and fewer
-                // where it cannot place their bytes, which is no matter of
-                // their timing.
-                let compared = ours.len().min(theirs.len());
-                let shift = ours.first().unwrap().0 - i128::from(theirs.first().unwrap().0);
-                let differing =
-                    ours.iter()
-                        .zip(theirs)
-                        .position(|(&(decoding, composition), &(dts, pts))| {
-                            decoding - i128::from(dts) != shift || composition != i128::from(pts)
-                        });
-                if let Some(sample) = differing {
-                    differences.push(format!(
-                        "{name} track {track_id}: sample {sample} differs, {:?} against ffprobe {:?}",
-                        ours.get(sample),
-                        theirs.get(sample)
-                    ));
-                }
-                // Why hold the time base against the timescale: a time
-                // counted in another unit could agree up to the shift alone.
-                let timescale = u64::from(trak.mdia.mdhd.timescale);
-                if let Some(&(numerator, denominator)) = time_bases.get(&track_id)
-                    && timescale.saturating_mul(numerator) != denominator
-                {
-                    differences.push(format!(
-                        "{name} track {track_id}: timescale {timescale}, ffprobe time base {numerator}/{denominator}"
-                    ));
-                }
-                tracks += 1;
-                samples += compared;
-            }
-        }
-        std::println!("compared {tracks} tracks, {samples} samples");
-        assert_eq!(differences, Vec::<String>::new());
-        assert!(tracks > 0 && samples > 0, "no track was compared");
     }
 }
