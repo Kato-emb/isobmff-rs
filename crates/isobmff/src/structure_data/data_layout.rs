@@ -9,7 +9,6 @@
 mod data_origin;
 mod data_reference;
 mod framing;
-mod table;
 
 pub(super) use data_origin::sample_table_data_origin;
 pub use data_reference::data_entry;

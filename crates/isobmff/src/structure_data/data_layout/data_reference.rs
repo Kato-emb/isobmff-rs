@@ -6,7 +6,6 @@
 
 use isobmff_boxes::{DataEntry, DataReferenceBox, SampleDescriptionBox};
 
-use super::table::count;
 use crate::structure_data::Error;
 
 /// Returns the data reference entry the sample entry `sample_description_index`, from 1, of `stsd` names in `dref`
@@ -55,7 +54,7 @@ pub fn data_entry<'a>(
         .and_then(|index| stsd.sample_descriptions.get(index))
         .ok_or(Error::SampleDescriptionIndexOutOfRange {
             sample_description_index,
-            sample_entry_count: count(stsd.sample_descriptions.len()),
+            sample_entry_count: u32::try_from(stsd.sample_descriptions.len()).unwrap_or(u32::MAX),
         })?;
     let data_reference_index =
         sample_entry
@@ -69,6 +68,6 @@ pub fn data_entry<'a>(
         .ok_or(Error::DataReferenceIndexOutOfRange {
             sample_description_index,
             data_reference_index,
-            data_entry_count: count(dref.data_entries.len()),
+            data_entry_count: u32::try_from(dref.data_entries.len()).unwrap_or(u32::MAX),
         })
 }

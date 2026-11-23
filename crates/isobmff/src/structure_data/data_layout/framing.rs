@@ -14,7 +14,6 @@ use isobmff_boxes::{
 };
 
 use super::data_origin::sample_table_data_origin;
-use super::table::count;
 use crate::structure_data::Error;
 
 /// Where the bytes of one sample of a sample table lie in its chunk, with its sample entry
@@ -280,8 +279,8 @@ impl<'a> ChunkOffsets<'a> {
     /// Number of the chunks not yet taken
     fn chunk_count(&self) -> u32 {
         match self {
-            Self::ChunkOffset(offsets) => count(offsets.len()),
-            Self::ChunkLargeOffset(offsets) => count(offsets.len()),
+            Self::ChunkOffset(offsets) => u32::try_from(offsets.len()).unwrap_or(u32::MAX),
+            Self::ChunkLargeOffset(offsets) => u32::try_from(offsets.len()).unwrap_or(u32::MAX),
         }
     }
 }
@@ -336,7 +335,7 @@ impl<'a> EntrySizes<'a> {
     fn sample_count(&self) -> u32 {
         match self {
             Self::Constant { sample_count, .. } => *sample_count,
-            Self::Table(sizes) => count(sizes.len()),
+            Self::Table(sizes) => u32::try_from(sizes.len()).unwrap_or(u32::MAX),
         }
     }
 }
