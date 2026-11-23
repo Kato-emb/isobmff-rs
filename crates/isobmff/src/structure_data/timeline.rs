@@ -190,19 +190,25 @@ impl<'a, Entry: SampleRun> SampleRuns<'a, Entry> {
             value: Entry::Value::default(),
         }
     }
+
+    /// Takes up to `at_most` samples of the current run, from the next run where it is used up, and returns how many it took with their value, or `None` past the last run
+    fn next_run(&mut self, at_most: u32) -> Option<(u32, Entry::Value)> {
+        while self.remaining == 0 {
+            let entry = self.entries.next()?;
+            self.remaining = entry.sample_count();
+            self.value = entry.value();
+        }
+        let taken = self.remaining.min(at_most);
+        self.remaining = self.remaining.saturating_sub(taken);
+        Some((taken, self.value))
+    }
 }
 
 impl<Entry: SampleRun> Iterator for SampleRuns<'_, Entry> {
     type Item = Entry::Value;
 
     fn next(&mut self) -> Option<Entry::Value> {
-        while self.remaining == 0 {
-            let entry = self.entries.next()?;
-            self.remaining = entry.sample_count();
-            self.value = entry.value();
-        }
-        self.remaining = self.remaining.saturating_sub(1);
-        Some(self.value)
+        self.next_run(1).map(|(_, value)| value)
     }
 }
 
@@ -306,6 +312,11 @@ pub fn media_duration(stbl: &SampleTableBox) -> u64 {
 /// [`media_duration`]. An end before 0 is 0; one past what a `u64` counts,
 /// `u64::MAX`.
 ///
+/// The specification takes the end of the sample with the largest
+/// composition time, for the `duration` of an `mdhd`, §8.4.2.3, and the
+/// `compositionEndTime` of a `cslg`, §8.6.1.4.3. Where samples last
+/// differently, the end returned here can be later than that.
+///
 /// ```
 /// use isobmff::boxes::{
 ///     CompositionOffsetBox, CompositionOffsetEntry, SampleTableBox, TimeToSampleBox,
@@ -333,27 +344,30 @@ pub fn media_duration(stbl: &SampleTableBox) -> u64 {
 /// ```
 #[must_use]
 pub fn composition_end(stbl: &SampleTableBox) -> u64 {
-    let mut offsets = stbl
-        .ctts
-        .iter()
-        .flat_map(|ctts| ctts.entries.iter())
-        .map(|entry| (entry.sample_count, entry.sample_offset));
-    let (mut offset_count, mut offset) = offsets.next().unwrap_or((0, 0));
+    let mut durations = SampleRuns::new(
+        stbl.stts
+            .as_ref()
+            .map(|stts| stts.entries.as_slice())
+            .unwrap_or_default(),
+    );
+    let mut offsets = SampleRuns::new(
+        stbl.ctts
+            .as_ref()
+            .map(|ctts| ctts.entries.as_slice())
+            .unwrap_or_default(),
+    );
     let (mut decoding_time, mut end) = (0_i128, 0_i128);
-    for run in stbl.stts.iter().flat_map(|stts| stts.entries.iter()) {
-        let (mut count, delta) = (run.sample_count, i128::from(run.sample_delta));
-        // Why not look at each sample: within a run of one duration and one
-        // composition offset, each sample ends later than the one before, so
-        // the last of the run ends latest, and the walk is linear in runs.
-        while count > 0 {
-            while offset_count == 0 {
-                (offset_count, offset) = offsets.next().unwrap_or((u32::MAX, 0));
-            }
-            let taken = count.min(offset_count);
-            decoding_time = decoding_time.saturating_add(delta.saturating_mul(i128::from(taken)));
+    while let Some((mut left, sample_delta)) = durations.next_run(u32::MAX) {
+        // Why not look at each sample: within samples of one duration and one
+        // composition offset, each ends later than the one before, so the last
+        // ends latest, and the walk is linear in the runs of both tables. The
+        // inner loop ends: `next_run` takes at least 1 sample while `left > 0`.
+        while left > 0 {
+            let (taken, offset) = offsets.next_run(left).unwrap_or((left, 0));
+            decoding_time = decoding_time
+                .saturating_add(i128::from(sample_delta).saturating_mul(i128::from(taken)));
             end = end.max(decoding_time.saturating_add(i128::from(offset)));
-            count = count.saturating_sub(taken);
-            offset_count = offset_count.saturating_sub(taken);
+            left = left.saturating_sub(taken);
         }
     }
     u64::try_from(end.max(0)).unwrap_or(u64::MAX)
