@@ -99,13 +99,6 @@ pub fn data_entry<'a>(
 /// * [`SequenceNumberOutsideMovieFragment`](Error::SequenceNumberOutsideMovieFragment):
 ///   the data reference entry is a `DataEntrySeqNumImdaBox`, whose samples
 ///   are each in a movie fragment, §8.7.2.1.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the sample table places its samples from the origin it returns"
-    )
-)]
 pub(super) fn sample_table_data_origin(
     stsd: &SampleDescriptionBox,
     dref: &DataReferenceBox,
@@ -151,13 +144,6 @@ pub(super) struct SampleFraming {
 /// counts, that sample is returned, at its offset, and the samples end after
 /// it. A variant of the chunk offset table or the sample size table this
 /// crate does not read declares no sample.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the sample table reads where its samples lie with it"
-    )
-)]
 pub(super) fn sample_framings<'a>(
     stsc: &'a SampleToChunkBox,
     chunk_offset: &'a ChunkOffsetVariant,
@@ -195,6 +181,13 @@ pub(super) struct SampleFramings<'a> {
     entry_sizes: EntrySizes<'a>,
     /// Number of the samples not yet taken
     sample_count: u32,
+}
+
+impl SampleFramings<'_> {
+    /// Returns the number of samples left to take, which fewer chunks, sizes or entries of `stsc` cut short
+    pub(super) const fn sample_count(&self) -> u32 {
+        self.sample_count
+    }
 }
 
 impl Iterator for SampleFramings<'_> {
@@ -242,6 +235,40 @@ impl Iterator for SampleFramings<'_> {
 }
 
 impl FusedIterator for SampleFramings<'_> {}
+
+/// Refuses the samples of `framings` whose sample entry, in `stsd`, names no data reference entry of `dref` a sample table may use, or whose bytes end past the last data offset
+///
+/// Only the sample entries the samples take are looked up: an entry of
+/// `stsc` that no sample takes, as one of a run of no chunk or of no sample,
+/// names none.
+///
+/// # Errors
+///
+/// * The failures of [`sample_table_data_origin`], for the first sample it
+///   fails for.
+/// * [`DataOffsetOverflow`](Error::DataOffsetOverflow): the first sample
+///   whose bytes end past the last data offset a `u64` counts.
+pub(super) fn check_sample_framings(
+    framings: SampleFramings<'_>,
+    stsd: &SampleDescriptionBox,
+    dref: &DataReferenceBox,
+) -> Result<(), Error> {
+    for (sample_number, framing) in (1..=u32::MAX).zip(framings) {
+        sample_table_data_origin(stsd, dref, framing.sample_description_index)?;
+        if framing
+            .offset
+            .checked_add(u64::from(framing.size))
+            .is_none()
+        {
+            return Err(Error::DataOffsetOverflow {
+                sample_number,
+                offset: framing.offset,
+                size: framing.size,
+            });
+        }
+    }
+    Ok(())
+}
 
 /// The `chunk_offset` of each chunk, from a chunk offset table of 32 or 64 bits, ISO/IEC 14496-12 §8.7.5
 #[derive(Debug, Clone)]
@@ -348,13 +375,6 @@ impl Iterator for EntrySizes<'_> {
 /// Returns the number of samples `sample_size` declares, or `None` for a variant this crate does not read
 ///
 /// A table of more entries than a `u32` counts declares `u32::MAX`.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the sample table holds the other tables against the number of samples it returns"
-    )
-)]
 pub(super) fn sample_count(sample_size: &SampleSizeVariant) -> Option<u32> {
     EntrySizes::new(sample_size).map(|sizes| sizes.sample_count())
 }
@@ -362,13 +382,6 @@ pub(super) fn sample_count(sample_size: &SampleSizeVariant) -> Option<u32> {
 /// Returns the number of chunks `chunk_offset` gives, or `None` for a variant this crate does not read
 ///
 /// A table of more entries than a `u32` counts gives `u32::MAX`.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the sample table checks its sample-to-chunk table against the number of chunks it returns"
-    )
-)]
 pub(super) fn chunk_count(chunk_offset: &ChunkOffsetVariant) -> Option<u32> {
     ChunkOffsets::new(chunk_offset).map(|offsets| offsets.chunk_count())
 }
@@ -385,13 +398,6 @@ pub(super) fn chunk_count(chunk_offset: &ChunkOffsetVariant) -> Option<u32> {
 /// For a table [`check_sample_to_chunk`] lets through, this is the number of
 /// samples [`sample_framings`] returns when the sizes and `sample_count`
 /// cover all the samples and no sample's end offset exceeds `u64::MAX`.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the sample table holds the number it returns against that of its sample size table"
-    )
-)]
 pub(super) fn chunk_sample_count(stsc: &SampleToChunkBox, chunk_count: u32) -> u64 {
     let ends = stsc
         .entries
@@ -426,13 +432,6 @@ pub(super) fn chunk_sample_count(stsc: &SampleToChunkBox, chunk_count: u32) -> u
 /// * [`FirstChunkNotIncreasing`](Error::FirstChunkNotIncreasing): the first
 ///   entry whose `first_chunk` is not after that of the entry before it,
 ///   §8.7.4.1.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the sample table refuses a sample-to-chunk table as the specification reads it"
-    )
-)]
 pub(super) fn check_sample_to_chunk(
     stsc: &SampleToChunkBox,
     chunk_count: u32,
@@ -466,10 +465,6 @@ pub(super) fn check_sample_to_chunk(
 
 #[cfg(test)]
 mod tests {
-    extern crate std;
-
-    use alloc::collections::BTreeMap;
-    use alloc::format;
     use alloc::string::String;
     use alloc::vec::Vec;
 
@@ -480,7 +475,6 @@ mod tests {
         SampleSizeVariant, SampleSizes, SampleToChunkBox, SampleToChunkEntry,
     };
     use isobmff_core::{AnyBox, BoxType, FourCc, Utf8String};
-    use isobmff_test_support::{conformance_files, ffprobe, ffprobe_packets};
 
     use crate::DataOrigin;
 
@@ -803,116 +797,5 @@ mod tests {
                 sample_entry_count: 1
             })
         );
-    }
-
-    #[test]
-    #[ignore = "reads the conformance files ISOBMFF_CONFORMANCE_DIR names, and runs ffprobe"]
-    fn the_samples_of_each_track_lie_where_ffprobe_reads_their_packets() {
-        let (mut tracks, mut samples, mut differences) = (0, 0, Vec::<String>::new());
-        let mut left_out = BTreeMap::<&str, usize>::new();
-        for file in conformance_files() {
-            let Some(moov) = file.movie_box() else {
-                continue;
-            };
-            let (name, path) = (&file.name, &file.path);
-            if !ffprobe(&["-v", "error"], path).status.success() {
-                continue;
-            }
-            let mut packets = BTreeMap::<u32, Vec<(u64, u64)>>::new();
-            for packet in ffprobe_packets(&["-ignore_editlist", "1"], path) {
-                packets
-                    .entry(packet.track_id)
-                    .or_default()
-                    .push((packet.pos, packet.size));
-            }
-            for trak in &moov.trak {
-                let (track_id, stbl) = (trak.tkhd.track_id, &trak.mdia.minf.stbl);
-                let dref = &trak.mdia.minf.dinf.dref;
-                let (Some(stsc), Some(chunk_offset), Some(sample_size)) =
-                    (&stbl.stsc, &stbl.chunk_offset, &stbl.sample_size)
-                else {
-                    *left_out.entry("without a table").or_default() += 1;
-                    continue;
-                };
-                let (Some(sample_count), Some(chunk_count)) =
-                    (sample_count(sample_size), chunk_count(chunk_offset))
-                else {
-                    *left_out.entry("of a variant not read").or_default() += 1;
-                    continue;
-                };
-                if sample_count == 0 {
-                    *left_out.entry("of no sample").or_default() += 1;
-                    continue;
-                }
-                if let Err(error) = check_sample_to_chunk(stsc, chunk_count) {
-                    differences.push(format!("{name} track {track_id}: {error}"));
-                    continue;
-                }
-                let chunk_samples = chunk_sample_count(stsc, chunk_count);
-                if chunk_samples != u64::from(sample_count) {
-                    differences.push(format!(
-                        "{name} track {track_id}: the chunks hold {chunk_samples} samples, the sample size table declares {sample_count}"
-                    ));
-                    continue;
-                }
-                // Why compare only the samples of this file: ffprobe reads
-                // the positions of the samples of another file, or of an
-                // `imda`, as if they were in this one.
-                let mut in_this_file = true;
-                for entry in &stsc.entries {
-                    match super::data_entry(&stbl.stsd, dref, entry.sample_description_index) {
-                        Ok(data_entry) => in_this_file &= data_entry.is_in_same_file(),
-                        Err(error) => differences.push(format!("{name} track {track_id}: {error}")),
-                    }
-                }
-                if !in_this_file {
-                    *left_out
-                        .entry("with samples outside this file")
-                        .or_default() += 1;
-                    continue;
-                }
-                let theirs = packets
-                    .get(&track_id)
-                    .map(Vec::as_slice)
-                    .unwrap_or_default();
-                let ours = sample_framings(stsc, chunk_offset, sample_size, sample_count)
-                    .map(|framing| (framing.offset, u64::from(framing.size)))
-                    .collect::<Vec<_>>();
-                // Why compare the samples both have: ffprobe reads the samples
-                // of the movie fragments after those of the `moov`.
-                let compared = ours.len().min(theirs.len());
-                if let Some(sample) = ours
-                    .iter()
-                    .zip(theirs)
-                    .position(|(ours, theirs)| ours != theirs)
-                {
-                    differences.push(format!(
-                        "{name} track {track_id}: sample {sample} at {:?}, ffprobe {:?}",
-                        ours.get(sample),
-                        theirs.get(sample)
-                    ));
-                }
-                let declared = usize::try_from(sample_count).unwrap();
-                if ours.len() != declared {
-                    differences.push(format!(
-                        "{name} track {track_id}: {} samples placed of the {declared} declared",
-                        ours.len()
-                    ));
-                }
-                // Why let ffprobe read more packets in a fragmented file
-                // alone: those are the samples of its movie fragments.
-                if theirs.len() < declared || (moov.mvex.is_none() && theirs.len() != declared) {
-                    differences.push(format!(
-                        "{name} track {track_id}: {declared} samples declared, ffprobe {} packets",
-                        theirs.len()
-                    ));
-                }
-                tracks += 1;
-                samples += compared;
-            }
-        }
-        std::println!("compared {tracks} tracks, {samples} samples; left out tracks {left_out:?}");
-        assert_eq!(differences, Vec::<String>::new());
-        assert!(tracks > 0 && samples > 0, "no track was compared");
     }
 }

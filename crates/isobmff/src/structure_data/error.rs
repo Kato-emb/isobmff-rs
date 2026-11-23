@@ -1,17 +1,62 @@
 //! Why the `structure-data` of a file is refused
 
+use alloc::boxed::Box;
 use core::fmt;
+
+use isobmff_core::BoxType;
 
 /// Why the tables of the `structure-data` of a file are refused
 #[non_exhaustive]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Error {
-    /// A sync sample number of a track names no sample of the track: it is
-    /// 0, or past the samples its sample size table declares, ISO/IEC
-    /// 14496-12 §8.6.2.3
-    SyncSampleNumberOutOfRange {
+    /// The `structure-data` of a track is refused, for `source`, ISO/IEC 14496-12 §3.1.54
+    Track {
         /// `track_ID` of the track
         track_id: u32,
+        /// Why the tables are refused, which is not itself a `Track`
+        source: Box<Error>,
+    },
+    /// A box a sample table holds, ISO/IEC 14496-12 §8.5, is absent, or is of
+    /// a variant this crate does not read
+    ///
+    /// The time-to-sample table, the sample-to-chunk table, a chunk offset
+    /// table and a sample size table are each mandatory, §8.6.1.2, §8.7.4,
+    /// §8.7.5 and §8.7.3. A chunk offset table is named `stco` whether it is
+    /// one of 32 or of 64 bits (`co64`), and a sample size table `stsz`
+    /// whether it is compact (`stz2`) or not.
+    MandatoryBoxMissing {
+        /// Type of the box
+        box_type: BoxType,
+    },
+    /// A table of a sample table covers another number of samples than the
+    /// sample size table, whose `sample_count` gives the number of samples
+    /// in the track, ISO/IEC 14496-12 §8.7.3.2
+    ///
+    /// A time-to-sample or composition offset table covers the
+    /// `sample_count`s of its entries, §8.6.1.2 and §8.6.1.3, and the
+    /// sample dependency types one sample for each entry, §8.6.4. The
+    /// sample-to-chunk table declares no number of samples: it covers those
+    /// its runs of chunks hold, `samples_per_chunk` for each chunk, §8.7.4.
+    SampleCountMismatch {
+        /// Type of the table: `stts`, `ctts`, `sdtp` or `stsc`
+        box_type: BoxType,
+        /// Number of the samples the table covers
+        table_sample_count: u64,
+        /// `sample_count` of the sample size table
+        sample_count: u32,
+    },
+    /// The bytes of a sample end past the last data offset a `u64` counts
+    DataOffsetOverflow {
+        /// `sample number`, from 1, of the sample, ISO/IEC 14496-12 §3.1.49
+        sample_number: u32,
+        /// Data offset of the first byte of the sample
+        offset: u64,
+        /// Number of the bytes of the sample
+        size: u32,
+    },
+    /// A sync sample number names no sample: it is 0, or past the samples
+    /// the sample size table declares, ISO/IEC 14496-12 §8.6.2.3
+    SyncSampleNumberOutOfRange {
         /// Index, from 0, of the entry of the `stss`
         entry: u64,
         /// `sample_number` of the entry
@@ -19,12 +64,10 @@ pub enum Error {
         /// Number of the samples of the track
         sample_count: u32,
     },
-    /// A sync sample number of a track is not after the one before it,
-    /// though the sync sample table is in strictly increasing order of
-    /// sample number, ISO/IEC 14496-12 §8.6.2.1
+    /// A sync sample number is not after the one before it, though the sync
+    /// sample table is in strictly increasing order of sample number, ISO/IEC
+    /// 14496-12 §8.6.2.1
     SyncSampleNumberNotIncreasing {
-        /// `track_ID` of the track
-        track_id: u32,
         /// Index, from 0, of the entry of the `stss`
         entry: u64,
         /// `sample_number` of the entry
@@ -96,23 +139,47 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Track { track_id, .. } => {
+                write!(
+                    formatter,
+                    "the structure-data of track {track_id} is refused"
+                )
+            }
+            Self::MandatoryBoxMissing { box_type } => write!(
+                formatter,
+                "the sample table holds no `{box_type}` this crate reads, which is mandatory"
+            ),
+            Self::SampleCountMismatch {
+                box_type,
+                table_sample_count,
+                sample_count,
+            } => write!(
+                formatter,
+                "the `{box_type}` covers {table_sample_count} samples, not the sample_count {sample_count} of the sample size table"
+            ),
+            Self::DataOffsetOverflow {
+                sample_number,
+                offset,
+                size,
+            } => write!(
+                formatter,
+                "sample {sample_number} at data offset {offset} has size {size}, which ends past the last data offset"
+            ),
             Self::SyncSampleNumberOutOfRange {
-                track_id,
                 entry,
                 sample_number,
                 sample_count,
             } => write!(
                 formatter,
-                "entry {entry} of the `stss` of track {track_id} has sample_number {sample_number}, which names none of its {sample_count} samples"
+                "entry {entry} of the `stss` has sample_number {sample_number}, which names none of the {sample_count} samples"
             ),
             Self::SyncSampleNumberNotIncreasing {
-                track_id,
                 entry,
                 sample_number,
                 previous_sample_number,
             } => write!(
                 formatter,
-                "entry {entry} of the `stss` of track {track_id} has sample_number {sample_number}, not after the sample_number {previous_sample_number} of the entry before it"
+                "entry {entry} of the `stss` has sample_number {sample_number}, not after the sample_number {previous_sample_number} of the entry before it"
             ),
             Self::FirstChunkNotOne { first_chunk } => write!(
                 formatter,
@@ -165,4 +232,22 @@ impl fmt::Display for Error {
     }
 }
 
-impl core::error::Error for Error {}
+impl core::error::Error for Error {
+    fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
+        match self {
+            Self::Track { source, .. } => Some(source.as_ref()),
+            Self::MandatoryBoxMissing { .. }
+            | Self::SampleCountMismatch { .. }
+            | Self::DataOffsetOverflow { .. }
+            | Self::SyncSampleNumberOutOfRange { .. }
+            | Self::SyncSampleNumberNotIncreasing { .. }
+            | Self::FirstChunkNotOne { .. }
+            | Self::FirstChunkOutOfRange { .. }
+            | Self::FirstChunkNotIncreasing { .. }
+            | Self::SampleDescriptionIndexOutOfRange { .. }
+            | Self::DataReferenceIndexMissing { .. }
+            | Self::DataReferenceIndexOutOfRange { .. }
+            | Self::SequenceNumberOutsideMovieFragment { .. } => None,
+        }
+    }
+}
