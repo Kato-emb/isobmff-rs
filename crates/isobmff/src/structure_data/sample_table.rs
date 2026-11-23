@@ -81,11 +81,17 @@ pub(super) fn samples<'a>(
     if let Some(stss) = stss {
         timeline::check_sync_samples(stss, sample_count)?;
     }
-    let framings = data_layout::sample_framings(stsc, chunk_offset, sample_size, sample_count);
-    data_layout::check_sample_framings(framings.clone(), &stbl.stsd, dref)?;
+    data_layout::check_sample_framings(
+        stsc,
+        chunk_offset,
+        sample_size,
+        sample_count,
+        &stbl.stsd,
+        dref,
+    )?;
     Ok(Samples {
         timings: timeline::sample_timings(stts, ctts, stss, sdtp, sample_count),
-        framings,
+        framings: data_layout::sample_framings(stsc, chunk_offset, sample_size, sample_count),
         stsd: &stbl.stsd,
         dref,
         track_id,
@@ -136,11 +142,6 @@ impl Iterator for Samples<'_> {
             offset: framing.offset,
             size: framing.size,
         })
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        let sample_count = usize::try_from(self.sample_count()).ok();
-        (sample_count.unwrap_or(usize::MAX), sample_count)
     }
 }
 

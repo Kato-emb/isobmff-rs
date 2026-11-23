@@ -5,6 +5,7 @@ mod tests {
     use std::collections::BTreeMap;
     use std::error::Error as _;
     use std::fs;
+    use std::num::NonZeroU32;
     use std::path::PathBuf;
 
     use isobmff::boxes::{
@@ -275,6 +276,33 @@ mod tests {
 
     const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
 
+    /// A track of `track_id` declaring the most samples a sample size table counts, each of 1 byte and lasting 1, in one chunk, with one entry in each table
+    fn track_of_the_most_samples(track_id: u32) -> TrackBox {
+        let mut trak = track(track_id, 1, &[], &[(1, u32::MAX)], &[0]);
+        let stbl = &mut trak.mdia.minf.stbl;
+        let mut stsz = SampleSizeBox::default();
+        stsz.sample_sizes = SampleSizes::Constant {
+            sample_size: NonZeroU32::MIN,
+            sample_count: u32::MAX,
+        };
+        stbl.sample_size = Some(SampleSizeVariant::SampleSize(stsz));
+        stbl.stts
+            .as_mut()
+            .unwrap()
+            .entries
+            .first_mut()
+            .unwrap()
+            .sample_count = u32::MAX;
+        trak
+    }
+
+    #[test]
+    fn the_tables_are_checked_without_a_step_for_each_sample_they_declare() {
+        let movie = movie((1..=4).map(track_of_the_most_samples));
+        let locations = MovieReader::new().handle_movie(&movie).unwrap();
+        assert_eq!(locations.sample_count(), 4 * u64::from(u32::MAX));
+    }
+
     /// The fixtures of the `isobmff` crate, `tests/fixtures`, each with its name
     fn fixtures() -> Vec<(String, PathBuf)> {
         let mut fixtures = fs::read_dir(FIXTURES)
@@ -335,10 +363,30 @@ mod tests {
             .collect()
     }
 
+    /// The tracks and samples compared, and the tracks of them in the conformance files
+    #[derive(Debug, Default)]
+    struct Tally {
+        tracks: usize,
+        samples: usize,
+        conformance_tracks: usize,
+    }
+
+    impl Tally {
+        fn add(&mut self, is_conformance: bool, samples: usize) {
+            self.tracks = self.tracks.saturating_add(1);
+            self.samples = self.samples.saturating_add(samples);
+            self.conformance_tracks = self
+                .conformance_tracks
+                .saturating_add(usize::from(is_conformance));
+        }
+    }
+
     #[test]
     #[ignore = "reads the conformance files ISOBMFF_CONFORMANCE_DIR names, and runs ffprobe"]
     fn the_samples_of_each_track_lie_and_are_timed_where_gpac_and_ffprobe_read_them() {
-        let (mut tracks, mut samples, mut differences) = (0, 0, Vec::<String>::new());
+        let mut differences = Vec::<String>::new();
+        let (mut timed, mut located) = (Tally::default(), Tally::default());
+        let mut times_only = Vec::<(String, u32, usize, usize)>::new();
         let mut left_out = Vec::<(String, Option<u32>, &str)>::new();
         let conformance = conformance_files()
             .into_iter()
@@ -442,21 +490,11 @@ mod tests {
                     left_out.push((name.clone(), Some(track_id), "of no sample"));
                     continue;
                 }
-                // Why compare only the samples of this file: ffprobe reads
-                // the positions of the samples of another file, or of an
-                // `imda`, as if they were in this one.
                 let entries = stbl.stsc.iter().flat_map(|stsc| &stsc.entries);
-                if entries.into_iter().any(|entry| {
+                let is_elsewhere = entries.into_iter().any(|entry| {
                     data_entry(&stbl.stsd, dref, entry.sample_description_index)
                         .is_ok_and(|data_entry| !data_entry.is_in_same_file())
-                }) {
-                    left_out.push((
-                        name.clone(),
-                        Some(track_id),
-                        "with samples outside this file",
-                    ));
-                    continue;
-                }
+                });
                 let Some(packets) = &packets else {
                     left_out.push((
                         name.clone(),
@@ -469,9 +507,14 @@ mod tests {
                     .get(&track_id)
                     .map(Vec::as_slice)
                     .unwrap_or_default();
-                // Why let ffprobe read more packets in a fragmented file
-                // alone: those are the samples of its movie fragments.
-                if theirs.len() < ours.len() || (moov.mvex.is_none() && theirs.len() != ours.len())
+                // Why let ffprobe read fewer packets of a track with samples
+                // outside this file: it drops those whose bytes it cannot
+                // read. Why let it read more in a fragmented file alone: those
+                // are the samples of its movie fragments.
+                if is_elsewhere && theirs.len() < ours.len() {
+                    times_only.push((name.clone(), track_id, ours.len(), theirs.len()));
+                } else if theirs.len() < ours.len()
+                    || (moov.mvex.is_none() && theirs.len() != ours.len())
                 {
                     differences.push(format!(
                         "{name} track {track_id}: {} samples, ffprobe {} packets",
@@ -486,7 +529,10 @@ mod tests {
                     let decoding_time = i128::from(ours.properties.decoding_time);
                     let composition_time =
                         decoding_time + i128::from(ours.properties.sample_composition_time_offset);
-                    (ours.offset, u64::from(ours.size)) != (theirs.pos, theirs.size)
+                    // Why not hold the positions of samples outside this
+                    // file: ffprobe reads them as if they were in this one.
+                    (!is_elsewhere
+                        && (ours.offset, u64::from(ours.size)) != (theirs.pos, theirs.size))
                         || theirs.dts.map(|dts| decoding_time - i128::from(dts)) != shift
                         || theirs.pts.map(i128::from) != Some(composition_time)
                 });
@@ -510,8 +556,11 @@ mod tests {
                         "{name} track {track_id}: timescale {timescale}, ffprobe time base {numerator}/{denominator}"
                     ));
                 }
-                tracks += 1;
-                samples += ours.len().min(theirs.len());
+                let compared = ours.len().min(theirs.len());
+                timed.add(report.is_some(), compared);
+                if !is_elsewhere {
+                    located.add(report.is_some(), compared);
+                }
             }
         }
         let mut tally = BTreeMap::<&str, usize>::new();
@@ -519,8 +568,18 @@ mod tests {
             println!("left out {name} track {track_id:?}: {bucket}");
             *tally.entry(bucket).or_default() += 1;
         }
-        println!("compared {tracks} tracks, {samples} samples; left out {tally:?}");
+        for (name, track_id, samples, packets) in &times_only {
+            println!(
+                "times alone of {name} track {track_id}: {samples} samples, ffprobe {packets} packets"
+            );
+        }
+        println!(
+            "compared the times of {timed:?}, the positions of {located:?}; left out {tally:?}"
+        );
         assert_eq!(differences, Vec::<String>::new());
-        assert!(tracks > 0 && samples > 0, "no track was compared");
+        assert!(
+            located.tracks > 0 && located.samples > 0,
+            "no track was compared"
+        );
     }
 }

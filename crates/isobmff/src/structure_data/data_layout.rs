@@ -7,6 +7,7 @@
 //! looks that entry up.
 
 use core::iter::FusedIterator;
+use core::num::{NonZeroU32, NonZeroU64};
 use core::slice;
 
 use isobmff_boxes::{
@@ -236,36 +237,95 @@ impl Iterator for SampleFramings<'_> {
 
 impl FusedIterator for SampleFramings<'_> {}
 
-/// Refuses the samples of `framings` whose sample entry, in `stsd`, names no data reference entry of `dref` a sample table may use, or whose bytes end past the last data offset
+/// Refuses the first `sample_count` samples the tables declare where the sample entry of their chunk, in `stsd`, names no data reference entry of `dref` a sample table may use, or where their bytes end past the last data offset
 ///
-/// Only the sample entries the samples take are looked up: an entry of
-/// `stsc` that no sample takes, as one of a run of no chunk or of no sample,
-/// names none.
+/// The tables are read as [`sample_framings`] reads them, for a
+/// sample-to-chunk table [`check_sample_to_chunk`] lets through. Each entry
+/// of `stsc` whose run holds a sample is looked up once: one whose run holds
+/// no chunk, or whose `samples_per_chunk` is 0, names no sample entry. The
+/// bytes of a chunk are summed from the sizes the sample size table stores,
+/// or from the `sample_size` it gives every sample, once for the chunk; the
+/// work grows with the entries the tables store, not with the samples they
+/// declare.
 ///
 /// # Errors
 ///
-/// * The failures of [`sample_table_data_origin`], for the first sample it
-///   fails for.
+/// * The failures of [`sample_table_data_origin`], for the first entry of
+///   `stsc` it fails for.
 /// * [`DataOffsetOverflow`](Error::DataOffsetOverflow): the first sample
 ///   whose bytes end past the last data offset a `u64` counts.
 pub(super) fn check_sample_framings(
-    framings: SampleFramings<'_>,
+    stsc: &SampleToChunkBox,
+    chunk_offset: &ChunkOffsetVariant,
+    sample_size: &SampleSizeVariant,
+    sample_count: u32,
     stsd: &SampleDescriptionBox,
     dref: &DataReferenceBox,
 ) -> Result<(), Error> {
-    for (sample_number, framing) in (1..=u32::MAX).zip(framings) {
-        sample_table_data_origin(stsd, dref, framing.sample_description_index)?;
-        if framing
-            .offset
-            .checked_add(u64::from(framing.size))
-            .is_none()
+    let (Some(chunk_offsets), Some(mut sizes)) = (
+        ChunkOffsets::new(chunk_offset),
+        EntrySizes::new(sample_size),
+    ) else {
+        return Ok(());
+    };
+    let mut sample_to_chunk = stsc.entries.as_slice();
+    // Why hold the entries left at the last look-up rather than look the entry
+    // up for each chunk: a run holds as many chunks as the chunk offset table,
+    // and its entry is looked up once.
+    let mut looked_up = None;
+    let mut sample_number = 0_u32;
+    for (chunk_number, first_offset) in (1..=u32::MAX).zip(chunk_offsets) {
+        while let [_, rest @ ..] = sample_to_chunk
+            && let [next, ..] = rest
+            && next.first_chunk <= chunk_number
         {
-            return Err(Error::DataOffsetOverflow {
-                sample_number,
-                offset: framing.offset,
-                size: framing.size,
-            });
+            sample_to_chunk = rest;
         }
+        let [entry, ..] = sample_to_chunk else {
+            break;
+        };
+        let samples = entry
+            .samples_per_chunk
+            .min(sample_count.saturating_sub(sample_number));
+        if samples == 0 {
+            continue;
+        }
+        if looked_up != Some(sample_to_chunk.len()) {
+            sample_table_data_origin(stsd, dref, entry.sample_description_index)?;
+            looked_up = Some(sample_to_chunk.len());
+        }
+        let overflow = |taken: u32, offset, size| Error::DataOffsetOverflow {
+            sample_number: sample_number.saturating_add(taken).saturating_add(1),
+            offset,
+            size,
+        };
+        match &mut sizes {
+            EntrySizes::Constant { sample_size, .. } => {
+                let size = NonZeroU64::from(*sample_size);
+                // Why saturate: at most `u32::MAX` samples of at most
+                // `u32::MAX` bytes each are fewer than `u64::MAX`.
+                let bytes = u64::from(samples).saturating_mul(size.get());
+                if first_offset.checked_add(bytes).is_none() {
+                    let room = u64::MAX.saturating_sub(first_offset);
+                    let taken = u32::try_from(room / size).unwrap_or(u32::MAX);
+                    let offset = u64::from(taken).saturating_mul(size.get());
+                    return Err(overflow(
+                        taken,
+                        first_offset.saturating_add(offset),
+                        sample_size.get(),
+                    ));
+                }
+            }
+            EntrySizes::Table(entry_sizes) => {
+                let mut offset = first_offset;
+                for (taken, &size) in (0..samples).zip(entry_sizes.by_ref()) {
+                    offset = offset
+                        .checked_add(u64::from(size))
+                        .ok_or_else(|| overflow(taken, offset, size))?;
+                }
+            }
+        }
+        sample_number = sample_number.saturating_add(samples);
     }
     Ok(())
 }
@@ -315,7 +375,7 @@ impl Iterator for ChunkOffsets<'_> {
 #[derive(Debug, Clone)]
 enum EntrySizes<'a> {
     Constant {
-        sample_size: u32,
+        sample_size: NonZeroU32,
         /// Number of the samples not yet taken
         // Why not `iter::repeat_n`: its length is a `usize`, which a target of
         // 16 bits cannot hold every `u32` `sample_count` in.
@@ -333,7 +393,7 @@ impl<'a> EntrySizes<'a> {
                     sample_size,
                     sample_count,
                 } => Some(Self::Constant {
-                    sample_size: sample_size.get(),
+                    sample_size: *sample_size,
                     sample_count: *sample_count,
                 }),
                 SampleSizes::Table { entry_sizes } => Some(Self::Table(entry_sizes.iter())),
@@ -365,7 +425,7 @@ impl Iterator for EntrySizes<'_> {
                 sample_count,
             } => {
                 *sample_count = sample_count.checked_sub(1)?;
-                Some(*sample_size)
+                Some(sample_size.get())
             }
             Self::Table(sizes) => sizes.next().copied(),
         }
@@ -479,8 +539,8 @@ mod tests {
     use crate::DataOrigin;
 
     use super::{
-        Error, SampleFraming, check_sample_to_chunk, chunk_count, chunk_sample_count, sample_count,
-        sample_framings, sample_table_data_origin,
+        Error, SampleFraming, check_sample_framings, check_sample_to_chunk, chunk_count,
+        chunk_sample_count, sample_count, sample_framings, sample_table_data_origin,
     };
 
     /// `stsc` of the runs of chunks `(first_chunk, samples_per_chunk, sample_description_index)`
@@ -754,6 +814,31 @@ mod tests {
         let mut dref = DataReferenceBox::default();
         dref.data_entries = [data_entry].to_vec();
         (stsd, dref)
+    }
+
+    #[test]
+    fn the_first_sample_of_a_constant_size_to_end_past_the_last_data_offset_is_refused() {
+        let (stsd, dref) = track_of(DataEntry::Url(DataEntryUrlBox::default()));
+        let check = |second_chunk_offset| {
+            check_sample_framings(
+                &stsc(&[(1, 4, 1)]),
+                &co64(&[0, second_chunk_offset]),
+                &constant(10, 8),
+                8,
+                &stsd,
+                &dref,
+            )
+        };
+        let overflow = |sample_number, offset| {
+            Err(Error::DataOffsetOverflow {
+                sample_number,
+                offset,
+                size: 10,
+            })
+        };
+        assert_eq!(check(u64::MAX - 25), overflow(7, u64::MAX - 5));
+        assert_eq!(check(u64::MAX - 39), overflow(8, u64::MAX - 9));
+        assert_eq!(check(u64::MAX - 40), Ok(()));
     }
 
     #[test]
