@@ -63,10 +63,8 @@ pub(super) fn sample_timings<'a>(
     sample_count: u32,
 ) -> SampleTimings<'a> {
     SampleTimings {
-        sample_deltas: SampleRuns::new(&stts.entries),
-        sample_offsets: SampleRuns::new(
-            ctts.map(|ctts| ctts.entries.as_slice()).unwrap_or_default(),
-        ),
+        sample_deltas: sample_deltas(Some(stts)),
+        sample_offsets: sample_offsets(ctts),
         sync_samples: stss.map(|stss| stss.sample_numbers.as_slice()),
         dependencies: sdtp
             .map(|sdtp| sdtp.entries.as_slice())
@@ -80,8 +78,8 @@ pub(super) fn sample_timings<'a>(
 /// The [`SampleTiming`] of each sample of a sample table, as [`sample_timings`] returns them
 #[derive(Debug, Clone)]
 pub(super) struct SampleTimings<'a> {
-    sample_deltas: SampleRuns<'a, TimeToSampleEntry>,
-    sample_offsets: SampleRuns<'a, CompositionOffsetEntry>,
+    sample_deltas: SampleRuns<'a, TimeToSampleEntry, u32>,
+    sample_offsets: SampleRuns<'a, CompositionOffsetEntry, i64>,
     /// The entries of the sync sample table from the first that may name the
     /// next sample, or `None` where the track has none: every sample is a
     /// sync sample, §8.6.2.1
@@ -135,67 +133,33 @@ impl Iterator for SampleTimings<'_> {
 
 impl FusedIterator for SampleTimings<'_> {}
 
-/// An entry of a table that gives a run of consecutive samples one value
-trait SampleRun {
-    /// Type of the value the entry gives each sample of its run
-    type Value: Copy + Default;
-
-    /// Number of the samples of the run
-    fn sample_count(&self) -> u32;
-
-    /// The value the entry gives each sample of its run
-    fn value(&self) -> Self::Value;
-}
-
-impl SampleRun for TimeToSampleEntry {
-    type Value = u32;
-
-    fn sample_count(&self) -> u32 {
-        self.sample_count
-    }
-
-    fn value(&self) -> u32 {
-        self.sample_delta
-    }
-}
-
-impl SampleRun for CompositionOffsetEntry {
-    type Value = i64;
-
-    fn sample_count(&self) -> u32 {
-        self.sample_count
-    }
-
-    fn value(&self) -> i64 {
-        self.sample_offset
-    }
-}
-
 /// The value each sample takes from the runs of samples of a table, in the order of the samples
 #[derive(Debug, Clone)]
-struct SampleRuns<'a, Entry: SampleRun> {
+struct SampleRuns<'a, Entry, Value> {
     entries: slice::Iter<'a, Entry>,
+    /// The `sample_count` of an entry, and the value it gives each sample of
+    /// its run
+    run_of: fn(&Entry) -> (u32, Value),
     /// Number of the samples of the current run not yet taken
     remaining: u32,
     /// The value of the current run
-    value: Entry::Value,
+    value: Value,
 }
 
-impl<'a, Entry: SampleRun> SampleRuns<'a, Entry> {
-    fn new(entries: &'a [Entry]) -> Self {
+impl<'a, Entry, Value: Copy + Default> SampleRuns<'a, Entry, Value> {
+    fn new(entries: &'a [Entry], run_of: fn(&Entry) -> (u32, Value)) -> Self {
         Self {
             entries: entries.iter(),
+            run_of,
             remaining: 0,
-            value: Entry::Value::default(),
+            value: Value::default(),
         }
     }
 
     /// Takes up to `at_most` samples of the current run, from the next run where it is used up, and returns how many it took with their value, or `None` past the last run
-    fn next_run(&mut self, at_most: u32) -> Option<(u32, Entry::Value)> {
+    fn next_run(&mut self, at_most: u32) -> Option<(u32, Value)> {
         while self.remaining == 0 {
-            let entry = self.entries.next()?;
-            self.remaining = entry.sample_count();
-            self.value = entry.value();
+            (self.remaining, self.value) = (self.run_of)(self.entries.next()?);
         }
         let taken = self.remaining.min(at_most);
         self.remaining = self.remaining.saturating_sub(taken);
@@ -203,18 +167,36 @@ impl<'a, Entry: SampleRun> SampleRuns<'a, Entry> {
     }
 }
 
-impl<Entry: SampleRun> Iterator for SampleRuns<'_, Entry> {
-    type Item = Entry::Value;
+impl<Entry, Value: Copy + Default> Iterator for SampleRuns<'_, Entry, Value> {
+    type Item = Value;
 
-    fn next(&mut self) -> Option<Entry::Value> {
+    fn next(&mut self) -> Option<Value> {
         self.next_run(1).map(|(_, value)| value)
     }
 }
 
-/// Returns the number of samples the runs of `entries` hold, or `u64::MAX` past what a `u64` counts
-fn run_total<Entry: SampleRun>(entries: &[Entry]) -> u64 {
-    entries.iter().fold(0_u64, |total, entry| {
-        total.saturating_add(u64::from(entry.sample_count()))
+/// The `sample_delta` each sample takes from the time-to-sample table `stts`, or none without one
+fn sample_deltas(stts: Option<&TimeToSampleBox>) -> SampleRuns<'_, TimeToSampleEntry, u32> {
+    SampleRuns::new(
+        stts.map(|stts| stts.entries.as_slice()).unwrap_or_default(),
+        |entry| (entry.sample_count, entry.sample_delta),
+    )
+}
+
+/// The `sample_offset` each sample takes from the composition offset table `ctts`, or none without one
+fn sample_offsets(
+    ctts: Option<&CompositionOffsetBox>,
+) -> SampleRuns<'_, CompositionOffsetEntry, i64> {
+    SampleRuns::new(
+        ctts.map(|ctts| ctts.entries.as_slice()).unwrap_or_default(),
+        |entry| (entry.sample_count, entry.sample_offset),
+    )
+}
+
+/// Returns the sum of `sample_counts`, or `u64::MAX` past what a `u64` counts
+fn run_total(sample_counts: impl Iterator<Item = u32>) -> u64 {
+    sample_counts.fold(0_u64, |total, sample_count| {
+        total.saturating_add(u64::from(sample_count))
     })
 }
 
@@ -234,8 +216,16 @@ pub(super) fn table_sample_counts(
     sdtp: Option<&SampleDependencyTypeBox>,
 ) -> impl Iterator<Item = (BoxType, u64)> {
     [
-        Some((TimeToSampleBox::BOX_TYPE, run_total(&stts.entries))),
-        ctts.map(|ctts| (CompositionOffsetBox::BOX_TYPE, run_total(&ctts.entries))),
+        Some((
+            TimeToSampleBox::BOX_TYPE,
+            run_total(stts.entries.iter().map(|entry| entry.sample_count)),
+        )),
+        ctts.map(|ctts| {
+            (
+                CompositionOffsetBox::BOX_TYPE,
+                run_total(ctts.entries.iter().map(|entry| entry.sample_count)),
+            )
+        }),
         sdtp.map(|sdtp| {
             (
                 SampleDependencyTypeBox::BOX_TYPE,
@@ -374,17 +364,9 @@ pub fn media_duration(stbl: &SampleTableBox) -> u64 {
 /// ```
 #[must_use]
 pub fn composition_end(stbl: &SampleTableBox) -> u64 {
-    let mut durations = SampleRuns::new(
-        stbl.stts
-            .as_ref()
-            .map(|stts| stts.entries.as_slice())
-            .unwrap_or_default(),
-    );
-    let mut offsets = SampleRuns::new(
-        stbl.ctts
-            .as_ref()
-            .map(|ctts| ctts.entries.as_slice())
-            .unwrap_or_default(),
+    let (mut durations, mut offsets) = (
+        sample_deltas(stbl.stts.as_ref()),
+        sample_offsets(stbl.ctts.as_ref()),
     );
     let (mut decoding_time, mut end) = (0_i128, 0_i128);
     while let Some((mut left, sample_delta)) = durations.next_run(u32::MAX) {
