@@ -11,7 +11,8 @@ mod tests {
         ChunkLargeOffsetBox, ChunkOffsetBox, ChunkOffsetVariant, CompositionOffsetBox,
         CompositionOffsetEntry, DataEntry, DataEntrySeqNumImdaBox, MovieBox,
         SampleDependencyTypeBox, SampleDependencyTypeEntry, SampleFlags, SampleSizeBox,
-        SampleToChunkBox, SampleToChunkEntry, SyncSampleBox, TimeToSampleBox, TrackBox,
+        SampleSizeVariant, SampleSizes, SampleToChunkBox, SampleToChunkEntry, SyncSampleBox,
+        TimeToSampleBox, TrackBox,
     };
     use isobmff::structure_data::data_layout::data_entry;
     use isobmff::structure_data::{Error, MovieReader};
@@ -338,7 +339,7 @@ mod tests {
     #[ignore = "reads the conformance files ISOBMFF_CONFORMANCE_DIR names, and runs ffprobe"]
     fn the_samples_of_each_track_lie_and_are_timed_where_gpac_and_ffprobe_read_them() {
         let (mut tracks, mut samples, mut differences) = (0, 0, Vec::<String>::new());
-        let mut left_out = BTreeMap::<&str, usize>::new();
+        let mut left_out = Vec::<(String, Option<u32>, &str)>::new();
         let conformance = conformance_files()
             .into_iter()
             .map(|file| (file.name, file.path, file.bytes, Some(file.report)));
@@ -355,7 +356,7 @@ mod tests {
                 .iter()
                 .any(|&(refused, ..)| refused == name)
             {
-                *left_out.entry("files whose tables disagree").or_default() += 1;
+                left_out.push((name, None, "a file whose tables disagree"));
                 continue;
             }
             let Some(moov) = movie_box(&bytes, &name) else {
@@ -392,6 +393,42 @@ mod tests {
             for trak in &moov.trak {
                 let track_id = trak.tkhd.track_id;
                 let ours = ours.get(&track_id).map(Vec::as_slice).unwrap_or_default();
+                let (stbl, dref) = (&trak.mdia.minf.stbl, &trak.mdia.minf.dinf.dref);
+                let declared = match &stbl.sample_size {
+                    Some(SampleSizeVariant::SampleSize(stsz)) => match &stsz.sample_sizes {
+                        SampleSizes::Constant { sample_count, .. } => {
+                            usize::try_from(*sample_count).unwrap()
+                        }
+                        SampleSizes::Table { entry_sizes } => entry_sizes.len(),
+                        _ => 0,
+                    },
+                    Some(SampleSizeVariant::CompactSampleSize(stz2)) => stz2.entry_sizes.len(),
+                    Some(_) | None => 0,
+                };
+                if ours.len() != declared {
+                    differences.push(format!(
+                        "{name} track {track_id}: {} samples, the sample size table {declared}",
+                        ours.len()
+                    ));
+                }
+                if let Some(location) = ours.iter().find(|location| {
+                    let origin = match data_entry(
+                        &stbl.stsd,
+                        dref,
+                        location.properties.sample_description_index,
+                    ) {
+                        Ok(DataEntry::Imda(_) | DataEntry::SeqNumImda(_)) => {
+                            Some(DataOrigin::IdentifiedMediaData)
+                        }
+                        Ok(_) => Some(DataOrigin::File),
+                        Err(_) => None,
+                    };
+                    origin != Some(location.data_origin)
+                }) {
+                    differences.push(format!(
+                        "{name} track {track_id}: {location:?} counts from another data origin than its data reference entry gives"
+                    ));
+                }
                 if let Some(gpac) = &gpac
                     && gpac.get(&track_id) != Some(&ours.len())
                 {
@@ -401,28 +438,31 @@ mod tests {
                         gpac.get(&track_id)
                     ));
                 }
-                if ours.is_empty() {
-                    *left_out.entry("tracks of no sample").or_default() += 1;
+                if declared == 0 {
+                    left_out.push((name.clone(), Some(track_id), "of no sample"));
                     continue;
                 }
                 // Why compare only the samples of this file: ffprobe reads
                 // the positions of the samples of another file, or of an
                 // `imda`, as if they were in this one.
-                let (stsd, dref) = (&trak.mdia.minf.stbl.stsd, &trak.mdia.minf.dinf.dref);
-                if ours.iter().any(|location| {
-                    location.data_origin != DataOrigin::File
-                        || data_entry(stsd, dref, location.properties.sample_description_index)
-                            .is_ok_and(|entry| !entry.is_in_same_file())
+                let entries = stbl.stsc.iter().flat_map(|stsc| &stsc.entries);
+                if entries.into_iter().any(|entry| {
+                    data_entry(&stbl.stsd, dref, entry.sample_description_index)
+                        .is_ok_and(|data_entry| !data_entry.is_in_same_file())
                 }) {
-                    *left_out
-                        .entry("tracks with samples outside this file")
-                        .or_default() += 1;
+                    left_out.push((
+                        name.clone(),
+                        Some(track_id),
+                        "with samples outside this file",
+                    ));
                     continue;
                 }
                 let Some(packets) = &packets else {
-                    *left_out
-                        .entry("tracks of a file ffprobe does not read")
-                        .or_default() += 1;
+                    left_out.push((
+                        name.clone(),
+                        Some(track_id),
+                        "of a file ffprobe does not read",
+                    ));
                     continue;
                 };
                 let theirs = packets
@@ -474,7 +514,12 @@ mod tests {
                 samples += ours.len().min(theirs.len());
             }
         }
-        println!("compared {tracks} tracks, {samples} samples; left out {left_out:?}");
+        let mut tally = BTreeMap::<&str, usize>::new();
+        for (name, track_id, bucket) in &left_out {
+            println!("left out {name} track {track_id:?}: {bucket}");
+            *tally.entry(bucket).or_default() += 1;
+        }
+        println!("compared {tracks} tracks, {samples} samples; left out {tally:?}");
         assert_eq!(differences, Vec::<String>::new());
         assert!(tracks > 0 && samples > 0, "no track was compared");
     }
