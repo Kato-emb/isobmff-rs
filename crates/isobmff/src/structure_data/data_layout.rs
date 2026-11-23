@@ -8,7 +8,7 @@
 
 use core::iter::FusedIterator;
 use core::num::{NonZeroU32, NonZeroU64};
-use core::slice;
+use core::{ptr, slice};
 
 use isobmff_boxes::{
     ChunkOffsetVariant, DataEntry, DataReferenceBox, SampleDescriptionBox, SampleSizeVariant,
@@ -152,10 +152,11 @@ pub(super) fn sample_framings<'a>(
     sample_count: u32,
 ) -> SampleFramings<'a> {
     SampleFramings {
-        sample_to_chunk: &stsc.entries,
-        chunk_offsets: ChunkOffsets::new(chunk_offset)
-            .unwrap_or(ChunkOffsets::ChunkOffset([].iter())),
-        chunk_number: 0,
+        chunks: ChunkEntries::new(
+            stsc,
+            ChunkOffsets::new(chunk_offset).unwrap_or(ChunkOffsets::ChunkOffset([].iter())),
+        ),
+        sample_description_index: 0,
         remaining: 0,
         offset: 0,
         entry_sizes: EntrySizes::new(sample_size).unwrap_or(EntrySizes::Table([].iter())),
@@ -166,15 +167,10 @@ pub(super) fn sample_framings<'a>(
 /// The [`SampleFraming`] of each sample of a sample table, as [`sample_framings`] returns them
 #[derive(Debug, Clone)]
 pub(super) struct SampleFramings<'a> {
-    /// The entries of the sample-to-chunk table from that of the current
-    /// chunk
-    sample_to_chunk: &'a [SampleToChunkEntry],
-    /// The `chunk_offset`s of the chunks after the current one
-    chunk_offsets: ChunkOffsets<'a>,
-    /// Number, from 1, of the current chunk, or 0 before the first
-    // Why hold the number rather than derive it from the offsets left: that
-    // needs the number of the chunks besides.
-    chunk_number: u32,
+    /// The chunks after the current one
+    chunks: ChunkEntries<'a>,
+    /// `sample_description_index` of the entry of `stsc` of the current chunk
+    sample_description_index: u32,
     /// Number of the samples of the current chunk not yet taken
     remaining: u32,
     /// Data offset of the next sample of the current chunk
@@ -196,29 +192,18 @@ impl Iterator for SampleFramings<'_> {
 
     fn next(&mut self) -> Option<SampleFraming> {
         self.sample_count = self.sample_count.checked_sub(1)?;
-        // Why the loops end: each chunk opened takes one `chunk_offset`, and
-        // each entry passed over shortens `sample_to_chunk`.
+        // Why the loop ends: each chunk opened takes one `chunk_offset`.
         while self.remaining == 0 {
-            self.offset = self.chunk_offsets.next()?;
-            // Why saturate: there are at most `u32::MAX` chunks, the
-            // `entry_count` of a chunk offset table.
-            self.chunk_number = self.chunk_number.saturating_add(1);
-            while let [_, rest @ ..] = self.sample_to_chunk
-                && let [next, ..] = rest
-                && next.first_chunk <= self.chunk_number
-            {
-                self.sample_to_chunk = rest;
-            }
-            self.remaining = self.sample_to_chunk.first()?.samples_per_chunk;
+            let (offset, entry) = self.chunks.next()?;
+            (self.offset, self.remaining, self.sample_description_index) = (
+                offset,
+                entry.samples_per_chunk,
+                entry.sample_description_index,
+            );
         }
-        // Why the entry is there: a chunk is opened only where `stsc` has an
-        // entry, and the slice keeps one entry at least once it has one.
-        let [entry, ..] = self.sample_to_chunk else {
-            return None;
-        };
         let size = self.entry_sizes.next()?;
         let framing = SampleFraming {
-            sample_description_index: entry.sample_description_index,
+            sample_description_index: self.sample_description_index,
             offset: self.offset,
             size,
         };
@@ -268,31 +253,21 @@ pub(super) fn check_sample_framings(
     ) else {
         return Ok(());
     };
-    let mut sample_to_chunk = stsc.entries.as_slice();
-    // Why hold the entries left at the last look-up rather than look the entry
-    // up for each chunk: a run holds as many chunks as the chunk offset table,
-    // and its entry is looked up once.
+    // Why hold the entry looked up last rather than look the entry up for
+    // each chunk: a run holds as many chunks as the chunk offset table, and
+    // its entry is looked up once.
     let mut looked_up = None;
     let mut sample_number = 0_u32;
-    for (chunk_number, first_offset) in (1..=u32::MAX).zip(chunk_offsets) {
-        while let [_, rest @ ..] = sample_to_chunk
-            && let [next, ..] = rest
-            && next.first_chunk <= chunk_number
-        {
-            sample_to_chunk = rest;
-        }
-        let [entry, ..] = sample_to_chunk else {
-            break;
-        };
+    for (first_offset, entry) in ChunkEntries::new(stsc, chunk_offsets) {
         let samples = entry
             .samples_per_chunk
             .min(sample_count.saturating_sub(sample_number));
         if samples == 0 {
             continue;
         }
-        if looked_up != Some(sample_to_chunk.len()) {
+        if !looked_up.is_some_and(|looked_up| ptr::eq(looked_up, entry)) {
             sample_table_data_origin(stsd, dref, entry.sample_description_index)?;
-            looked_up = Some(sample_to_chunk.len());
+            looked_up = Some(entry);
         }
         let overflow = |taken: u32, offset, size| Error::DataOffsetOverflow {
             sample_number: sample_number.saturating_add(taken).saturating_add(1),
@@ -328,6 +303,54 @@ pub(super) fn check_sample_framings(
         sample_number = sample_number.saturating_add(samples);
     }
     Ok(())
+}
+
+/// The `chunk_offset` of each chunk, with the entry of the sample-to-chunk table whose run holds it, ISO/IEC 14496-12 §8.7.4
+///
+/// Chunk n takes the entry reached by moving on from the entry of the chunk
+/// before it while the next entry's `first_chunk` is at most n, as
+/// [`sample_framings`] sets out. The chunks end where the chunk offset table
+/// does, or before the first where `stsc` has no entry.
+#[derive(Debug, Clone)]
+struct ChunkEntries<'a> {
+    /// The entries of the sample-to-chunk table from that of the chunk before
+    /// the next
+    sample_to_chunk: &'a [SampleToChunkEntry],
+    /// The `chunk_offset`s of the chunks not yet taken
+    chunk_offsets: ChunkOffsets<'a>,
+    /// Number, from 1, of the chunk taken last, or 0 before the first
+    // Why hold the number rather than derive it from the offsets left: that
+    // needs the number of the chunks besides.
+    chunk_number: u32,
+}
+
+impl<'a> ChunkEntries<'a> {
+    fn new(stsc: &'a SampleToChunkBox, chunk_offsets: ChunkOffsets<'a>) -> Self {
+        Self {
+            sample_to_chunk: &stsc.entries,
+            chunk_offsets,
+            chunk_number: 0,
+        }
+    }
+}
+
+impl<'a> Iterator for ChunkEntries<'a> {
+    type Item = (u64, &'a SampleToChunkEntry);
+
+    fn next(&mut self) -> Option<(u64, &'a SampleToChunkEntry)> {
+        let chunk_offset = self.chunk_offsets.next()?;
+        // Why saturate: there are at most `u32::MAX` chunks, the `entry_count`
+        // of a chunk offset table.
+        self.chunk_number = self.chunk_number.saturating_add(1);
+        // Why the loop ends: each entry passed over shortens `sample_to_chunk`.
+        while let [_, rest @ ..] = self.sample_to_chunk
+            && let [next, ..] = rest
+            && next.first_chunk <= self.chunk_number
+        {
+            self.sample_to_chunk = rest;
+        }
+        Some((chunk_offset, self.sample_to_chunk.first()?))
+    }
 }
 
 /// The `chunk_offset` of each chunk, from a chunk offset table of 32 or 64 bits, ISO/IEC 14496-12 §8.7.5
