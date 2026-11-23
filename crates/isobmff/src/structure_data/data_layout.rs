@@ -6,11 +6,12 @@
 //! data reference entry specifying its container (`dref`). [`data_entry`]
 //! looks that entry up.
 
+mod data_origin;
 mod data_reference;
 mod framing;
 
+pub(super) use data_origin::sample_table_data_origin;
 pub use data_reference::data_entry;
-pub(super) use data_reference::sample_table_data_origin;
 pub(super) use framing::{
     SampleFramings, check_sample_framings, check_sample_to_chunk, chunk_count, chunk_sample_count,
     sample_count, sample_framings,
