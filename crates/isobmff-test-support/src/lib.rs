@@ -210,6 +210,8 @@ pub struct FfprobePacket {
     pub dts: Option<i64>,
     /// Presentation timestamp of the packet, in the time base of its stream, where `ffprobe` reports one
     pub pts: Option<i64>,
+    /// Duration of the packet, in the time base of its stream, where `ffprobe` reports one
+    pub duration: Option<i64>,
     /// Time base of the stream, as its numerator and denominator
     pub time_base: (u64, u64),
     /// Whether `ffprobe` flags the packet to be discarded after decoding: one an edit list does not present from its start
@@ -296,6 +298,7 @@ pub fn ffprobe_packets(arguments: &[&str], file: &Path) -> Vec<FfprobePacket> {
                 size: number("size").expect("ffprobe reports the size of a packet"),
                 dts: packet.get("dts").and_then(Value::as_i64),
                 pts: packet.get("pts").and_then(Value::as_i64),
+                duration: packet.get("duration").and_then(Value::as_i64),
                 time_base,
                 discard: packet
                     .get("flags")
