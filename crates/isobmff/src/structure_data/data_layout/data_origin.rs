@@ -96,9 +96,11 @@ impl DataOrigins {
     ///
     /// `data_entry` is the data reference entry of the sample entry of
     /// `location`, as [`data_entry`](super::data_entry) looks it up. A
-    /// location that counts from the start of a file is returned as it is:
-    /// its data offset is a file offset in the file the entry identifies,
-    /// ISO/IEC 14496-12 §8.7.5.3. One that counts from a movie fragment is
+    /// location that counts from the start of a file is returned as it is,
+    /// unchecked: its data offset is a file offset in the file the entry
+    /// identifies, ISO/IEC 14496-12 §8.7.5.3 for a sample table and the last
+    /// row of §8.8.7.1 Table 6 for a track fragment. One that counts from a
+    /// movie fragment is
     /// returned at the file offset of the `moof` taken last plus its data
     /// offset, whether its media data lies in the file or in an
     /// `IdentifiedMediaDataBox`, §8.8.7.1 Table 6; that such an
@@ -117,8 +119,9 @@ impl DataOrigins {
     ///   decode.
     /// * [`MovieFragmentPositionMissing`](Error::MovieFragmentPositionMissing):
     ///   `location` counts from a movie fragment, and no `moof` was taken.
-    /// * [`FileOffsetOverflow`](Error::FileOffsetOverflow): the bytes of the
-    ///   sample end past the last file offset.
+    /// * [`FileOffsetOverflow`](Error::FileOffsetOverflow): `location` counts
+    ///   from a movie fragment, and the bytes of the sample end past the last
+    ///   file offset once the offset of the `moof` is added.
     /// * [`IdentifiedMediaDataNotRead`](Error::IdentifiedMediaDataNotRead):
     ///   `location` counts from an `IdentifiedMediaDataBox`, none of which is
     ///   taken.

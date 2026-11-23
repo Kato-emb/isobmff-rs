@@ -394,8 +394,7 @@ mod tests {
     }
 
     #[test]
-    fn a_sample_whose_bytes_end_past_the_last_file_offset_is_refused_and_the_origins_stay_as_they_were()
-     {
+    fn a_refused_sample_past_the_last_file_offset_leaves_the_origins_as_they_were() {
         let same_file = DataEntry::Url(DataEntryUrlBox::default());
         let mut data_origins = DataOrigins::new();
         data_origins.handle_movie_fragment(u64::MAX - 120, 1);

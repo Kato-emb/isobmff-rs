@@ -157,10 +157,10 @@ pub enum Error {
     /// data reference entry of its sample entry gives, ISO/IEC 14496-12 §6.1
     /// Table 1 and §8.7.2.1
     ///
-    /// The locations a [`MovieReader`](super::MovieReader) returns, each with
-    /// the entry [`data_entry`](super::data_layout::data_entry) looks up for
-    /// it, never disagree so; a caller that hands a location over with the
-    /// entry of another sample entry can make them.
+    /// A location a [`MovieReader`](super::MovieReader) returns never
+    /// disagrees so with the entry [`data_entry`](super::data_layout::data_entry)
+    /// looks up for it; a location handed over with the entry of another
+    /// sample entry can.
     DataOriginMismatch {
         /// `sample_description_index`, from 1, of the sample entry
         sample_description_index: u32,
