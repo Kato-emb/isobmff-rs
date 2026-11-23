@@ -127,12 +127,21 @@ pub enum Error {
         /// Number of the data reference entries of the `dref`
         data_entry_count: u32,
     },
-    /// The sample entry of the samples of a sample table names a
+    /// The sample entry of a sample in no movie fragment names a
     /// `DataEntrySeqNumImdaBox`, whose samples are each in a movie fragment,
     /// ISO/IEC 14496-12 §8.7.2.1
     SequenceNumberOutsideMovieFragment {
         /// `sample_description_index`, from 1, of the sample entry
         sample_description_index: u32,
+    },
+    /// The data reference entry a sample entry names is a `DataEntryImdaBox`
+    /// or a `DataEntrySeqNumImdaBox` that does not decode, whose type sets the
+    /// data origin of its samples, ISO/IEC 14496-12 §8.7.2.1 and §8.7.5.3
+    DataEntryNotDecoded {
+        /// `sample_description_index`, from 1, of the sample entry
+        sample_description_index: u32,
+        /// Type of the data reference entry
+        box_type: BoxType,
     },
 }
 
@@ -222,11 +231,18 @@ impl fmt::Display for Error {
                 formatter,
                 "sample entry {sample_description_index} has data_reference_index {data_reference_index}, which names none of the {data_entry_count} data reference entries"
             ),
+            Self::DataEntryNotDecoded {
+                sample_description_index,
+                box_type,
+            } => write!(
+                formatter,
+                "sample entry {sample_description_index} names a data reference entry `{box_type}` that does not decode"
+            ),
             Self::SequenceNumberOutsideMovieFragment {
                 sample_description_index,
             } => write!(
                 formatter,
-                "sample entry {sample_description_index} of a sample table names a DataEntrySeqNumImdaBox, which only movie fragments use"
+                "sample entry {sample_description_index} names a DataEntrySeqNumImdaBox for a sample in no movie fragment"
             ),
         }
     }
@@ -247,7 +263,8 @@ impl core::error::Error for Error {
             | Self::SampleDescriptionIndexOutOfRange { .. }
             | Self::DataReferenceIndexMissing { .. }
             | Self::DataReferenceIndexOutOfRange { .. }
-            | Self::SequenceNumberOutsideMovieFragment { .. } => None,
+            | Self::SequenceNumberOutsideMovieFragment { .. }
+            | Self::DataEntryNotDecoded { .. } => None,
         }
     }
 }
