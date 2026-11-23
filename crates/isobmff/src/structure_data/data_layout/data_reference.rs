@@ -93,7 +93,7 @@ pub fn data_entry<'a>(
 ///   fragment, §8.7.2.1.
 /// * [`DataEntryNotDecoded`](Error::DataEntryNotDecoded): `data_entry` is a
 ///   `DataEntryImdaBox` or a `DataEntrySeqNumImdaBox` that does not decode.
-fn imda_identifier(
+pub(super) fn imda_identifier(
     data_entry: &DataEntry,
     sample_description_index: u32,
     sequence_number: Option<u32>,
@@ -130,9 +130,12 @@ fn imda_identifier(
 /// # Errors
 ///
 /// * The failures of [`data_entry`].
-/// * The failures of [`imda_identifier`] for a sample in no movie fragment:
+/// * [`SequenceNumberOutsideMovieFragment`](Error::SequenceNumberOutsideMovieFragment):
 ///   the data reference entry is a `DataEntrySeqNumImdaBox`, whose samples
-///   are each in a movie fragment, §8.7.2.1, or one that does not decode.
+///   are each in a movie fragment, §8.7.2.1.
+/// * [`DataEntryNotDecoded`](Error::DataEntryNotDecoded): the data reference
+///   entry is a `DataEntryImdaBox` or a `DataEntrySeqNumImdaBox` that does
+///   not decode.
 pub(in crate::structure_data) fn sample_table_data_origin(
     stsd: &SampleDescriptionBox,
     dref: &DataReferenceBox,
@@ -220,8 +223,7 @@ mod tests {
     }
 
     #[test]
-    fn a_data_reference_entry_names_the_identified_media_data_of_its_imda_identifier_or_of_the_sequence_number_of_its_movie_fragment()
-     {
+    fn an_entry_names_its_imda_by_identifier_or_by_the_sequence_number_of_its_movie_fragment() {
         let mut imdt = DataEntryImdaBox::default();
         imdt.imda_ref_identifier = 7;
         let (imdt, snim, url) = (

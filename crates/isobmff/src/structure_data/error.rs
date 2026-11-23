@@ -135,13 +135,50 @@ pub enum Error {
         sample_description_index: u32,
     },
     /// The data reference entry a sample entry names is a `DataEntryImdaBox`
-    /// or a `DataEntrySeqNumImdaBox` that does not decode, whose type sets the
-    /// data origin of its samples, ISO/IEC 14496-12 §8.7.2.1 and §8.7.5.3
+    /// or a `DataEntrySeqNumImdaBox` that does not decode, whose type places
+    /// the media data of its samples in an `IdentifiedMediaDataBox`, ISO/IEC
+    /// 14496-12 §8.7.2.1
     DataEntryNotDecoded {
         /// `sample_description_index`, from 1, of the sample entry
         sample_description_index: u32,
         /// Type of the data reference entry
         box_type: BoxType,
+    },
+    /// A sample counts its data offset from a movie fragment, and no movie
+    /// fragment was taken, ISO/IEC 14496-12 §8.8.7.1 Table 6
+    MovieFragmentPositionMissing,
+    /// A sample lies in an `IdentifiedMediaDataBox` that has not been read,
+    /// ISO/IEC 14496-12 §8.1.4 and §8.7.2.1
+    IdentifiedMediaDataNotRead {
+        /// `imda_identifier` of the `IdentifiedMediaDataBox`
+        imda_identifier: u32,
+    },
+    /// A sample counts its data offset from another data origin than the
+    /// data reference entry of its sample entry gives, ISO/IEC 14496-12 §6.1
+    /// Table 1 and §8.7.2.1
+    ///
+    /// The locations a [`MovieReader`](super::MovieReader) returns, each with
+    /// the entry [`data_entry`](super::data_layout::data_entry) looks up for
+    /// it, never disagree so; a caller that hands a location over with the
+    /// entry of another sample entry can make them.
+    DataOriginMismatch {
+        /// `sample_description_index`, from 1, of the sample entry
+        sample_description_index: u32,
+        /// `imda_identifier` of the `IdentifiedMediaDataBox` the data
+        /// reference entry places the media data in, or `None` where it places
+        /// it in none: the sample counted from the start of its file where it
+        /// is `Some`, and from an `IdentifiedMediaDataBox` where it is `None`
+        imda_identifier: Option<u32>,
+    },
+    /// The bytes of a sample, at a data offset from a data origin at a file
+    /// offset, end past the last file offset a `u64` counts
+    FileOffsetOverflow {
+        /// File offset of the data origin
+        data_origin_offset: u64,
+        /// Data offset of the first byte of the sample, from the data origin
+        offset: u64,
+        /// Number of the bytes of the sample
+        size: u32,
     },
 }
 
@@ -238,6 +275,36 @@ impl fmt::Display for Error {
                 formatter,
                 "sample entry {sample_description_index} names a data reference entry `{box_type}` that does not decode"
             ),
+            Self::MovieFragmentPositionMissing => write!(
+                formatter,
+                "a sample counts its data offset from a movie fragment, and no movie fragment was taken"
+            ),
+            Self::IdentifiedMediaDataNotRead { imda_identifier } => write!(
+                formatter,
+                "a sample lies in the IdentifiedMediaDataBox of imda_identifier {imda_identifier}, which has not been read"
+            ),
+            Self::DataOriginMismatch {
+                sample_description_index,
+                imda_identifier: Some(imda_identifier),
+            } => write!(
+                formatter,
+                "a sample of sample entry {sample_description_index} counts from the start of its file, though its data reference entry places it in the IdentifiedMediaDataBox of imda_identifier {imda_identifier}"
+            ),
+            Self::DataOriginMismatch {
+                sample_description_index,
+                imda_identifier: None,
+            } => write!(
+                formatter,
+                "a sample of sample entry {sample_description_index} counts from an IdentifiedMediaDataBox, though its data reference entry places it in none"
+            ),
+            Self::FileOffsetOverflow {
+                data_origin_offset,
+                offset,
+                size,
+            } => write!(
+                formatter,
+                "a sample at data offset {offset} from a data origin at file offset {data_origin_offset} has size {size}, which ends past the last file offset"
+            ),
             Self::SequenceNumberOutsideMovieFragment {
                 sample_description_index,
             } => write!(
@@ -264,7 +331,11 @@ impl core::error::Error for Error {
             | Self::DataReferenceIndexMissing { .. }
             | Self::DataReferenceIndexOutOfRange { .. }
             | Self::SequenceNumberOutsideMovieFragment { .. }
-            | Self::DataEntryNotDecoded { .. } => None,
+            | Self::DataEntryNotDecoded { .. }
+            | Self::MovieFragmentPositionMissing
+            | Self::IdentifiedMediaDataNotRead { .. }
+            | Self::DataOriginMismatch { .. }
+            | Self::FileOffsetOverflow { .. } => None,
         }
     }
 }

@@ -21,7 +21,8 @@ mod tests {
     use isobmff_test_support::fixtures::{movie, track};
     use isobmff_test_support::serde_json::Value;
     use isobmff_test_support::{
-        FfprobePacket, conformance_files, ffprobe, ffprobe_packets, gpac_list, movie_box,
+        FfprobePacket, conformance_files, ffprobe, ffprobe_packets, fixture_movie_box, gpac_list,
+        movie_box,
     };
 
     /// The location of the sample of track `track_id` decoded at `decoding_time` for `sample_duration`, at data offset `offset` of the file for `size` bytes, of the first sample entry
@@ -355,7 +356,7 @@ mod tests {
     #[test]
     fn the_fixtures_whose_tables_disagree_are_refused() {
         for (name, box_type, table_sample_count) in REFUSED_FIXTURES {
-            let movie = movie_box(&fs::read(format!("{FIXTURES}/{name}")).unwrap(), name).unwrap();
+            let movie = fixture_movie_box(name);
             assert_eq!(
                 refused(&movie),
                 of_track(

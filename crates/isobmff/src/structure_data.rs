@@ -4,8 +4,9 @@
 //! 14496-12 §3.1.54. [`MovieReader`] reads the [`SampleLocation`] of each
 //! sample the sample tables of a `moov` declare. [`timeline`] reads when the
 //! samples of a sample table are decoded and composed, and how long they
-//! last; [`data_layout`] where their bytes lie, and which data reference
-//! entry specifies their container.
+//! last; [`data_layout`] where their bytes lie, which data reference entry
+//! specifies their container, and, with
+//! [`DataOrigins`](data_layout::DataOrigins), at which file offset.
 
 use alloc::boxed::Box;
 use alloc::vec::{self, Vec};
@@ -103,8 +104,9 @@ impl MovieReader {
     ///   samples than the sample size table, §8.7.3.2, or a sync sample table
     ///   not in strictly increasing order of sample number, §8.6.2.1; where
     ///   the sample entry of a sample names no data reference entry, §8.5.2.3,
-    ///   or one whose samples are each in a movie fragment, §8.7.2.1; and where
-    ///   the bytes of a sample end past the last data offset.
+    ///   one whose samples are each in a movie fragment, §8.7.2.1, or one of an
+    ///   `IdentifiedMediaDataBox` that does not decode; and where the bytes of
+    ///   a sample end past the last data offset.
     pub fn handle_movie<'a>(&mut self, movie: &'a MovieBox) -> Result<SampleLocations<'a>, Error> {
         let tracks = movie
             .trak

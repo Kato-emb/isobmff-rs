@@ -2,10 +2,9 @@
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
-use std::fs;
 
 use isobmff::structure_data::MovieReader;
-use isobmff_test_support::movie_box;
+use isobmff_test_support::fixture_movie_box;
 
 thread_local! {
     // Why count per thread: the test harness runs tests on threads of their
@@ -53,12 +52,7 @@ fn allocated_by<T>(run: impl FnOnce() -> T) -> (T, usize) {
 #[test]
 fn the_locations_of_the_samples_of_a_movie_are_returned_without_allocating() {
     let name = "movie_moov_first.mp4";
-    let file = fs::read(format!(
-        "{}/../crates/isobmff/tests/fixtures/{name}",
-        env!("CARGO_MANIFEST_DIR")
-    ))
-    .unwrap();
-    let movie = movie_box(&file, name).unwrap();
+    let movie = fixture_movie_box(name);
     let mut reader = MovieReader::new();
     let (locations, checked) = allocated_by(|| reader.handle_movie(&movie).unwrap());
     let (returned, iterated) = allocated_by(|| locations.count());
