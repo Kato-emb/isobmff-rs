@@ -14,7 +14,7 @@ use isobmff_boxes::{
 };
 
 use super::data_origin::sample_table_data_origin;
-use super::data_reference::count;
+use super::table::count;
 use crate::structure_data::Error;
 
 /// Where the bytes of one sample of a sample table lie in its chunk, with its sample entry

@@ -6,12 +6,8 @@
 
 use isobmff_boxes::{DataEntry, DataReferenceBox, SampleDescriptionBox};
 
+use super::table::count;
 use crate::structure_data::Error;
-
-/// Returns the number of the entries of a table of `length` entries, or `u32::MAX` past what a `u32` counts, the width of an `entry_count`
-pub(super) fn count(length: usize) -> u32 {
-    u32::try_from(length).unwrap_or(u32::MAX)
-}
 
 /// Returns the data reference entry the sample entry `sample_description_index`, from 1, of `stsd` names in `dref`
 ///
