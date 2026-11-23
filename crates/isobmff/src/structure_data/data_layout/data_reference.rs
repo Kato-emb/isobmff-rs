@@ -1,4 +1,4 @@
-//! Which data reference entry specifies the container of the samples of a sample entry, and the `data origin` of their data offsets
+//! Which data reference entry specifies the container of the samples of a sample entry, and the `data origin` of the samples of a sample table
 //!
 //! The data reference table (`dref`), ISO/IEC 14496-12 §8.7.2, lists the
 //! containers of the media data of a track; the `data_reference_index` of a
