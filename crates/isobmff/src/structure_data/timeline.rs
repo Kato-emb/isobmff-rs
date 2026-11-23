@@ -6,14 +6,6 @@
 //! what it depends on (`sdtp`). [`media_duration`] and [`composition_end`]
 //! say how long the samples of a sample table last.
 
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the sample table reads the timing of its samples with what is private here"
-    )
-)]
-
 use core::iter::FusedIterator;
 use core::ops::RangeInclusive;
 use core::slice;
@@ -56,6 +48,13 @@ pub(super) struct SampleTiming {
 /// dependency types, takes the value that table gives without it, and an
 /// entry of the sync sample table that is not after the one before it is
 /// passed over; [`check_sync_samples`] refuses such an entry.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the sample table reads the timing of its samples with it"
+    )
+)]
 pub(super) fn sample_timings<'a>(
     stts: &'a TimeToSampleBox,
     ctts: Option<&'a CompositionOffsetBox>,
@@ -222,6 +221,13 @@ fn run_total<Entry: SampleRun>(entries: &[Entry]) -> u64 {
 /// Returns the number of samples each of `stts`, `ctts` and `sdtp` that is present declares, with its box type
 ///
 /// A count past what a `u64` counts is `u64::MAX`.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the sample table holds each count against that of its sample size table"
+    )
+)]
 pub(super) fn table_sample_counts(
     stts: &TimeToSampleBox,
     ctts: Option<&CompositionOffsetBox>,
@@ -254,6 +260,13 @@ pub(super) fn table_sample_counts(
 /// * [`SyncSampleNumberNotIncreasing`](Error::SyncSampleNumberNotIncreasing):
 ///   the first entry whose `sample_number` is not after that of the entry
 ///   before it, §8.6.2.1.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the sample table refuses a sync sample table as the specification reads it"
+    )
+)]
 pub(super) fn check_sync_samples(
     stss: &SyncSampleBox,
     sample_count: u32,
