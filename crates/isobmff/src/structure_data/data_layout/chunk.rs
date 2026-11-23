@@ -9,11 +9,9 @@ use core::num::{NonZeroU32, NonZeroU64};
 use core::{ptr, slice};
 
 use isobmff_boxes::{
-    ChunkOffsetVariant, DataReferenceBox, SampleDescriptionBox, SampleSizeVariant, SampleSizes,
-    SampleToChunkBox, SampleToChunkEntry,
+    ChunkOffsetVariant, SampleSizeVariant, SampleSizes, SampleToChunkBox, SampleToChunkEntry,
 };
 
-use super::data_reference::sample_table_data_origin;
 use crate::structure_data::Error;
 
 /// Where the bytes of one sample of a sample table lie in its chunk, with its sample entry
@@ -124,30 +122,57 @@ impl Iterator for SampleFramings<'_> {
 
 impl FusedIterator for SampleFramings<'_> {}
 
-/// Refuses the first `sample_count` samples the tables declare where the sample entry of their chunk, in `stsd`, names no data reference entry of `dref` a sample table may use, or where their bytes end past the last data offset
+/// Returns the `sample_description_index` of each entry of `stsc` whose run holds one of the first `sample_count` samples, once for each entry
+///
+/// The tables are read as [`sample_framings`] reads them. An entry whose run
+/// holds no chunk, or whose `samples_per_chunk` is 0, holds no sample, and
+/// neither does one past the first `sample_count` samples. The work grows
+/// with the chunks the chunk offset table stores, not with the samples the
+/// tables declare.
+pub(in crate::structure_data) fn sample_description_indices<'a>(
+    stsc: &'a SampleToChunkBox,
+    chunk_offset: &'a ChunkOffsetVariant,
+    sample_count: u32,
+) -> impl Iterator<Item = u32> + 'a {
+    let chunk_offsets =
+        ChunkOffsets::new(chunk_offset).unwrap_or(ChunkOffsets::ChunkOffset([].iter()));
+    let (mut remaining, mut previous) = (sample_count, None);
+    ChunkEntries::new(stsc, chunk_offsets)
+        .map_while(move |(_, entry)| {
+            (remaining > 0).then(|| {
+                let samples = entry.samples_per_chunk.min(remaining);
+                remaining = remaining.saturating_sub(samples);
+                // Why compare with the entry before rather than return the
+                // index of each chunk: a run holds as many chunks as the chunk
+                // offset table, and its entry is returned once.
+                let is_next_entry =
+                    samples > 0 && !previous.is_some_and(|previous| ptr::eq(previous, entry));
+                if is_next_entry {
+                    previous = Some(entry);
+                }
+                is_next_entry.then_some(entry.sample_description_index)
+            })
+        })
+        .flatten()
+}
+
+/// Refuses the first `sample_count` samples the tables declare where their bytes end past the last data offset
 ///
 /// The tables are read as [`sample_framings`] reads them, for a
-/// sample-to-chunk table [`check_sample_to_chunk`] lets through. Each entry
-/// of `stsc` whose run holds a sample is looked up once: one whose run holds
-/// no chunk, or whose `samples_per_chunk` is 0, names no sample entry. The
-/// bytes of a chunk are summed from the sizes the sample size table stores,
-/// or from the `sample_size` it gives every sample, once for the chunk; the
-/// work grows with the entries the tables store, not with the samples they
-/// declare.
+/// sample-to-chunk table [`check_sample_to_chunk`] lets through. The bytes of
+/// a chunk are summed from the sizes the sample size table stores, or from the
+/// `sample_size` it gives every sample, once for the chunk; the work grows
+/// with the entries the tables store, not with the samples they declare.
 ///
 /// # Errors
 ///
-/// * The failures of [`sample_table_data_origin`], for the first entry of
-///   `stsc` it fails for.
 /// * [`DataOffsetOverflow`](Error::DataOffsetOverflow): the first sample
 ///   whose bytes end past the last data offset a `u64` counts.
-pub(in crate::structure_data) fn check_sample_framings(
+pub(in crate::structure_data) fn check_data_offsets(
     stsc: &SampleToChunkBox,
     chunk_offset: &ChunkOffsetVariant,
     sample_size: &SampleSizeVariant,
     sample_count: u32,
-    stsd: &SampleDescriptionBox,
-    dref: &DataReferenceBox,
 ) -> Result<(), Error> {
     let (Some(chunk_offsets), Some(mut sizes)) = (
         ChunkOffsets::new(chunk_offset),
@@ -155,10 +180,6 @@ pub(in crate::structure_data) fn check_sample_framings(
     ) else {
         return Ok(());
     };
-    // Why hold the entry looked up last rather than look the entry up for
-    // each chunk: a run holds as many chunks as the chunk offset table, and
-    // its entry is looked up once.
-    let mut looked_up = None;
     let mut sample_number = 0_u32;
     for (first_offset, entry) in ChunkEntries::new(stsc, chunk_offsets) {
         let samples = entry
@@ -166,10 +187,6 @@ pub(in crate::structure_data) fn check_sample_framings(
             .min(sample_count.saturating_sub(sample_number));
         if samples == 0 {
             continue;
-        }
-        if !looked_up.is_some_and(|looked_up| ptr::eq(looked_up, entry)) {
-            sample_table_data_origin(stsd, dref, entry.sample_description_index)?;
-            looked_up = Some(entry);
         }
         let overflow = |taken: u32, offset, size| Error::DataOffsetOverflow {
             sample_number: sample_number.saturating_add(taken).saturating_add(1),
@@ -455,15 +472,13 @@ pub(in crate::structure_data) fn check_sample_to_chunk(
 mod tests {
     use alloc::vec::Vec;
 
+    use super::{
+        Error, SampleFraming, check_data_offsets, check_sample_to_chunk, chunk_count,
+        chunk_sample_count, sample_count, sample_description_indices, sample_framings,
+    };
     use isobmff_boxes::{
         ChunkLargeOffsetBox, ChunkOffsetBox, ChunkOffsetVariant, CompactSampleSizeBox,
         SampleSizeBox, SampleSizeVariant, SampleSizes, SampleToChunkBox, SampleToChunkEntry,
-    };
-    use isobmff_test_support::fixtures::track;
-
-    use super::{
-        Error, SampleFraming, check_sample_framings, check_sample_to_chunk, chunk_count,
-        chunk_sample_count, sample_count, sample_framings,
     };
 
     /// `stsc` of the runs of chunks `(first_chunk, samples_per_chunk, sample_description_index)`
@@ -726,17 +741,34 @@ mod tests {
     }
 
     #[test]
+    fn the_sample_entry_of_each_run_that_holds_a_sample_is_named_once() {
+        let indices = |runs: &[(u32, u32, u32)], chunks: &[u32], sample_count| {
+            sample_description_indices(&stsc(runs), &stco(chunks), sample_count).collect::<Vec<_>>()
+        };
+        assert_eq!(
+            indices(&[(1, 1, 1), (3, 1, 2)], &[0, 10, 20, 30], 4),
+            [1, 2]
+        );
+        assert_eq!(
+            indices(&[(1, 1, 1), (2, 0, 7), (3, 1, 2)], &[0, 10, 20], 2),
+            [1, 2]
+        );
+        assert_eq!(
+            indices(&[(1, 1, 1), (2, 1, 2), (2, 1, 3)], &[0, 10], 2),
+            [1, 3]
+        );
+        assert_eq!(indices(&[(1, 2, 1), (2, 1, 2)], &[0, 10], 2), [1]);
+        assert_eq!(indices(&[(1, 1, 1)], &[0, 10], 0), Vec::<u32>::new());
+    }
+
+    #[test]
     fn the_first_sample_of_a_constant_size_to_end_past_the_last_data_offset_is_refused() {
-        let trak = track(1, 1, &[], &[], &[]);
-        let (stsd, dref) = (&trak.mdia.minf.stbl.stsd, &trak.mdia.minf.dinf.dref);
         let check = |second_chunk_offset| {
-            check_sample_framings(
+            check_data_offsets(
                 &stsc(&[(1, 4, 1)]),
                 &co64(&[0, second_chunk_offset]),
                 &constant(10, 8),
                 8,
-                stsd,
-                dref,
             )
         };
         let overflow = |sample_number, offset| {

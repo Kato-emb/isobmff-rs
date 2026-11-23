@@ -39,7 +39,12 @@ use crate::{SampleLocation, SampleProperties};
 ///   sample size table, ISO/IEC 14496-12 §8.7.3.2.
 /// * The failures of [`check_sync_samples`](timeline::check_sync_samples).
 /// * The failures of
-///   [`check_sample_framings`](data_layout::check_sample_framings).
+///   [`sample_table_data_origin`](data_layout::sample_table_data_origin),
+///   for the first entry of the sample-to-chunk table whose run holds a
+///   sample and whose sample entry it fails for: an entry that holds no
+///   sample is not looked at.
+/// * The failures of
+///   [`check_data_offsets`](data_layout::check_data_offsets).
 pub(super) fn samples<'a>(
     stbl: &'a SampleTableBox,
     dref: &'a DataReferenceBox,
@@ -81,14 +86,12 @@ pub(super) fn samples<'a>(
     if let Some(stss) = stss {
         timeline::check_sync_samples(stss, sample_count)?;
     }
-    data_layout::check_sample_framings(
-        stsc,
-        chunk_offset,
-        sample_size,
-        sample_count,
-        &stbl.stsd,
-        dref,
-    )?;
+    for sample_description_index in
+        data_layout::sample_description_indices(stsc, chunk_offset, sample_count)
+    {
+        data_layout::sample_table_data_origin(&stbl.stsd, dref, sample_description_index)?;
+    }
+    data_layout::check_data_offsets(stsc, chunk_offset, sample_size, sample_count)?;
     Ok(Samples {
         timings: timeline::sample_timings(stts, ctts, stss, sdtp, sample_count),
         framings: data_layout::sample_framings(stsc, chunk_offset, sample_size, sample_count),

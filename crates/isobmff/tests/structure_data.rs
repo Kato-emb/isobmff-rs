@@ -11,13 +11,13 @@ mod tests {
     use isobmff::boxes::{
         ChunkLargeOffsetBox, ChunkOffsetBox, ChunkOffsetVariant, CompositionOffsetBox,
         CompositionOffsetEntry, DataEntry, DataEntrySeqNumImdaBox, MovieBox,
-        SampleDependencyTypeBox, SampleDependencyTypeEntry, SampleFlags, SampleSizeBox,
-        SampleSizeVariant, SampleSizes, SampleToChunkBox, SampleToChunkEntry, SyncSampleBox,
-        TimeToSampleBox, TrackBox,
+        SampleDependencyTypeBox, SampleDependencyTypeEntry, SampleDescription, SampleEntry,
+        SampleFlags, SampleSizeBox, SampleSizeVariant, SampleSizes, SampleToChunkBox,
+        SampleToChunkEntry, SyncSampleBox, TimeToSampleBox, TrackBox,
     };
     use isobmff::structure_data::data_layout::data_entry;
     use isobmff::structure_data::{Error, MovieReader};
-    use isobmff::{BoxDefinition, BoxType, DataOrigin, SampleLocation, SampleProperties};
+    use isobmff::{BoxDefinition, BoxType, DataOrigin, FourCc, SampleLocation, SampleProperties};
     use isobmff_test_support::fixtures::{movie, track};
     use isobmff_test_support::serde_json::Value;
     use isobmff_test_support::{
@@ -235,6 +235,37 @@ mod tests {
             .entries
             .get_mut(index)
             .unwrap()
+    }
+
+    #[test]
+    fn a_data_reference_a_sample_table_cannot_use_is_reported_before_a_sample_past_the_last_data_offset()
+     {
+        let mut trak = track(1, 1, &[10, 1], &[(1, 1), (2, 1)], &[0, 0]);
+        let mut co64 = ChunkLargeOffsetBox::default();
+        co64.chunk_offsets = vec![u64::MAX - 5, 0];
+        trak.mdia.minf.stbl.chunk_offset = Some(ChunkOffsetVariant::ChunkLargeOffset(co64));
+        let descriptions = &mut trak.mdia.minf.stbl.stsd.sample_descriptions;
+        descriptions.push(SampleDescription::Typed(SampleEntry::new(
+            FourCc::new([0; 4]),
+            2,
+            Vec::new(),
+        )));
+        trak.mdia
+            .minf
+            .dinf
+            .dref
+            .data_entries
+            .push(DataEntry::SeqNumImda(DataEntrySeqNumImdaBox::default()));
+        stsc_entry(&mut trak, 1).sample_description_index = 2;
+        assert_eq!(
+            refused(&movie([trak])),
+            of_track(
+                1,
+                Error::SequenceNumberOutsideMovieFragment {
+                    sample_description_index: 2
+                }
+            )
+        );
     }
 
     #[test]

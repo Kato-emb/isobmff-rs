@@ -96,14 +96,15 @@ impl MovieReader {
     /// # Errors
     ///
     /// * [`Track`](Error::Track): the sample table of the first track whose
-    ///   tables are refused, with why. They are refused where they disagree,
-    ///   as a table that covers another number of samples than the sample
-    ///   size table, ISO/IEC 14496-12 §8.7.3.2, or a sync sample table not in
-    ///   strictly increasing order of sample number, §8.6.2.1; where one the
-    ///   sample table must hold is absent; where the sample entry of a sample
-    ///   names no data reference entry, §8.5.2.3, or one whose samples are
-    ///   each in a movie fragment, §8.7.2.1; and where the bytes of a sample
-    ///   end past the last data offset.
+    ///   tables are refused, with why. They are refused, in this order: where
+    ///   a table the sample table must hold is absent; where they disagree, as
+    ///   a sample-to-chunk table whose `first_chunk`s do not go up from 1,
+    ///   ISO/IEC 14496-12 §8.7.4.3, a table that covers another number of samples than the
+    ///   sample size table, §8.7.3.2, or a sync sample table not in strictly
+    ///   increasing order of sample number, §8.6.2.1; where the sample entry of
+    ///   a sample names no data reference entry, §8.5.2.3, or one whose
+    ///   samples are each in a movie fragment, §8.7.2.1; and where the bytes
+    ///   of a sample end past the last data offset.
     pub fn handle_movie<'a>(&mut self, movie: &'a MovieBox) -> Result<SampleLocations<'a>, Error> {
         let tracks = movie
             .trak
