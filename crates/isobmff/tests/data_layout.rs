@@ -314,6 +314,15 @@ mod tests {
         }
     }
 
+    /// The location of a sample 16 bytes from a movie fragment, as at the file offset `offset`
+    fn at_file_offset(offset: u64) -> SampleLocation {
+        SampleLocation {
+            data_origin: DataOrigin::File,
+            offset,
+            ..location(DataOrigin::MovieFragment)
+        }
+    }
+
     #[test]
     fn each_data_origin_is_taken_with_the_data_reference_entry_of_its_sample() {
         let mut imdt = DataEntryImdaBox::default();
@@ -332,11 +341,7 @@ mod tests {
             DataOrigin::MovieFragment,
             DataOrigin::IdentifiedMediaData,
         ];
-        let at_1016 = Ok(SampleLocation {
-            data_origin: DataOrigin::File,
-            offset: 1016,
-            ..location(DataOrigin::MovieFragment)
-        });
+        let at_1016 = Ok(at_file_offset(1016));
         let mismatch = |imda_identifier| {
             Err(Error::DataOriginMismatch {
                 sample_description_index: 1,
@@ -417,16 +422,9 @@ mod tests {
                 size: 105
             })
         );
-        let at = |offset| {
-            Ok(SampleLocation {
-                data_origin: DataOrigin::File,
-                offset,
-                ..location(DataOrigin::MovieFragment)
-            })
-        };
         assert_eq!(
             data_origins.handle_location(location(DataOrigin::MovieFragment), &same_file),
-            at(u64::MAX - 104)
+            Ok(at_file_offset(u64::MAX - 104))
         );
     }
 
@@ -434,22 +432,15 @@ mod tests {
     fn the_samples_count_from_the_moof_taken_last() {
         let same_file = DataEntry::Url(DataEntryUrlBox::default());
         let mut data_origins = DataOrigins::new();
-        let at = |offset| {
-            Ok(SampleLocation {
-                data_origin: DataOrigin::File,
-                offset,
-                ..location(DataOrigin::MovieFragment)
-            })
-        };
         data_origins.handle_movie_fragment(1000, 1);
         assert_eq!(
             data_origins.handle_location(location(DataOrigin::MovieFragment), &same_file),
-            at(1016)
+            Ok(at_file_offset(1016))
         );
         data_origins.handle_movie_fragment(2000, 2);
         assert_eq!(
             data_origins.handle_location(location(DataOrigin::MovieFragment), &same_file),
-            at(2016)
+            Ok(at_file_offset(2016))
         );
     }
 }

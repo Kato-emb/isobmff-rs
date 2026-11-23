@@ -147,6 +147,9 @@ impl DataOrigins {
                 let movie_fragment = self
                     .movie_fragment
                     .ok_or(Error::MovieFragmentPositionMissing)?;
+                // Why check the end as well as the start: a start within a
+                // `u64` lets through a sample whose last byte lies past
+                // `u64::MAX`, at no file offset.
                 let offset = movie_fragment
                     .offset
                     .checked_add(location.offset)
