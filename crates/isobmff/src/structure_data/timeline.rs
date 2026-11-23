@@ -400,7 +400,7 @@ pub fn composition_end(stbl: &SampleTableBox) -> u64 {
             left = left.saturating_sub(taken);
         }
     }
-    u64::try_from(end.max(0)).unwrap_or(u64::MAX)
+    u64::try_from(end).unwrap_or(u64::MAX)
 }
 
 #[cfg(test)]
