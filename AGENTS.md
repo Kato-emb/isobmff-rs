@@ -23,7 +23,7 @@ to write.
 * Derive `Debug`, `Clone`, `PartialEq` and `Eq` on every public value type (a box, a sample, a configuration, an error); `Hash` where the fields allow it; `Copy` on a newtype or a small field-only struct. A state machine a caller drives (a reader, a writer) derives `Debug` and `Clone` only: its equality would have to mean "same future outputs", which the buffers it lends from make a hand-written, fragile contract. Implement `Default` only where the specification defines the default value, or for a configuration whose doc states why each default is chosen.
 * A newtype over an integer converts with `From` when every value is valid and with `TryFrom` when some are not (`flags` is 24 bits), and reads back with `get`. Do not add a `new` beside them; only a type that must be built in a `const`, such as `FourCc` or `Uuid`, has a `const fn new`, and implements `From` as well.
 * A value type whose construction can fail only by a value out of its range returns an error struct of its own that carries the value, as `TryFromIntError` does; reading a box, and a state machine, report through one `Error` enum per module, named `Error` and qualified by its path. Every error type implements `core::error::Error`; its `Display` text starts lower-case, names the field and the value found, and ends without a period, so it reads well when a caller's error wraps it. A `Display` text describes its own level only and never repeats the message of the error `source` returns, so a reporter that prints the chain prints each cause once.
-* A typed box is obtained from the bytes of a gathered box by an explicit conversion (`BoxDecode`, or `TryFrom`); a reader carries no type parameter and no registry, and an extension crate reads its own boxes the same way.
+* A typed box is obtained from the payload of a box by an explicit conversion (`BoxDecode`, or `TryFrom`); a reader carries no type parameter and no registry, and an extension crate reads its own boxes the same way.
 * Every entry point a user drives, such as a reader, a writer, or a conversion of a box, has a doctest. The crate doc has a quickstart that reads a fixture end to end.
 * Where the specification leaves a choice to the user of this crate, such as which tracks to subscribe to or whether to seek, the doc of the type involved says in one sentence what the crate does not do, so the user does not look for it.
 * The summary line of a public type's doc says what the thing is to someone who does not have the specification, with the specification's term in backticks, and the next line cites the clause as Naming prescribes: ``/// Declarations of a whole presentation, such as its timescale and duration, the `movie header` `` then ``/// [`MovieHeaderBox`] (`mvhd`), ISO/IEC 14496-12 §8.2.2``.
@@ -84,9 +84,9 @@ fn observe(buffer: &[u8]) -> Observation {
 fn step(&mut self) -> Progress {
     match (self.state, observe(self.buffer.unread())) {
         (_, Observation::NeedMoreData) => Progress::NeedMoreData,
-        (State::Header, Observation::Header(header)) if self.gathers(header.box_type()) => {
+        (State::Header, Observation::Header(header)) if self.reads_payload(header.box_type()) => {
             self.consume(header.header_size());
-            self.state = State::Gathering { header };
+            self.state = State::Payload { header };
             Progress::Advanced
         }
         (State::Header, Observation::Header(header)) => {

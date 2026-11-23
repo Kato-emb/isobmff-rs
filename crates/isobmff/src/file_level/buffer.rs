@@ -1,6 +1,6 @@
 //! The input a reader holds, lent to the events it returns
 //!
-//! A reader copies the box headers and the payloads it gathers into one
+//! A reader copies the box headers and the payloads it reads into one
 //! buffer, cuts boxes off its front, and lends an event a range of it until
 //! the next poll. This is that buffer, with the rule for when the cut bytes
 //! are dropped.
