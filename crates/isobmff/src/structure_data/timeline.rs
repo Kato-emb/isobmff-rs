@@ -370,13 +370,16 @@ mod tests {
 
     use isobmff_boxes::{
         CompositionOffsetBox, CompositionOffsetEntry, MovieBox, SampleDependencyTypeBox,
-        SampleDependencyTypeEntry, SampleFlags, SampleSizeVariant, SampleSizes, SyncSampleBox,
-        TimeToSampleBox, TimeToSampleEntry,
+        SampleDependencyTypeEntry, SampleFlags, SampleSizeVariant, SampleSizes, SampleTableBox,
+        SyncSampleBox, TimeToSampleBox, TimeToSampleEntry,
     };
     use isobmff_core::{BoxDecode, BoxDefinition, Boxes};
     use isobmff_test_support::{conformance_files, ffprobe, ffprobe_packets};
 
-    use super::{Error, SampleTiming, check_sync_samples, sample_timings, table_sample_counts};
+    use super::{
+        Error, SampleTiming, check_sync_samples, composition_end, media_duration, sample_timings,
+        table_sample_counts,
+    };
 
     fn stts(runs: &[(u32, u32)]) -> TimeToSampleBox {
         let mut stts = TimeToSampleBox::default();
@@ -509,6 +512,65 @@ mod tests {
         assert_eq!(
             sample_timings(&stts, None, None, Some(&sdtp), 3).collect::<Vec<_>>(),
             [depending(0, 2), depending(1, 1), depending(2, 0)]
+        );
+    }
+
+    /// Sample table of the runs of `stts` and, where given, of `ctts`
+    fn stbl(stts_runs: &[(u32, u32)], ctts_runs: Option<&[(u32, i64)]>) -> SampleTableBox {
+        let mut stbl = SampleTableBox::default();
+        (stbl.stts, stbl.ctts) = (Some(stts(stts_runs)), ctts_runs.map(ctts));
+        stbl
+    }
+
+    #[test]
+    fn a_sample_table_without_a_time_to_sample_table_composes_nothing() {
+        assert_eq!(composition_end(&SampleTableBox::default()), 0);
+    }
+
+    #[test]
+    fn a_composition_that_ends_before_0_ends_at_0() {
+        assert_eq!(composition_end(&stbl(&[(2, 1)], Some(&[(2, -10)]))), 0);
+    }
+
+    #[test]
+    fn an_end_past_what_a_u64_counts_is_u64_max_even_after_a_negative_offset() {
+        let runs = [(u32::MAX, u32::MAX), (u32::MAX, u32::MAX)];
+        assert_eq!(composition_end(&stbl(&runs, None)), u64::MAX);
+        let offsets = [(u32::MAX, i64::MIN), (u32::MAX, i64::MIN)];
+        assert_eq!(composition_end(&stbl(&runs, Some(&offsets))), u64::MAX);
+    }
+
+    #[test]
+    fn samples_past_a_short_composition_offset_table_end_at_their_decoding_end() {
+        assert_eq!(composition_end(&stbl(&[(3, 10)], Some(&[(1, 25)]))), 35);
+    }
+
+    #[test]
+    fn runs_of_no_sample_are_passed_over() {
+        let stbl = stbl(
+            &[(1, 10), (0, 99), (1, 10)],
+            Some(&[(0, 50), (1, 5), (0, 7), (1, 0)]),
+        );
+        assert_eq!(composition_end(&stbl), 20);
+    }
+
+    #[test]
+    fn runs_that_do_not_line_up_are_cut_where_either_ends() {
+        let stbl = stbl(&[(3, 10), (2, 1)], Some(&[(2, 0), (2, 30), (1, 0)]));
+        assert_eq!(composition_end(&stbl), 61);
+    }
+
+    #[test]
+    fn without_a_composition_offset_table_the_end_is_the_media_duration() {
+        let stbl = stbl(&[(3, 10), (2, 1)], None);
+        assert_eq!((composition_end(&stbl), media_duration(&stbl)), (32, 32));
+    }
+
+    #[test]
+    fn a_sample_that_lasts_past_the_one_composed_last_ends_the_composition() {
+        assert_eq!(
+            composition_end(&stbl(&[(1, 5), (1, 1)], Some(&[(1, 6), (1, 3)]))),
+            11
         );
     }
 
