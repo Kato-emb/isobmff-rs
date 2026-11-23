@@ -1,8 +1,11 @@
 //! Sans-IO reading and writing of ISO base media files (ISO/IEC 14496-12)
 //!
 //! [`file_level`] reads the boxes at `file level` from bytes that arrive in
-//! pieces, and [`structure_data`] the timing of the samples a sample table
-//! declares. The boxes themselves are read and written with [`boxes`], and the
+//! pieces. [`structure_data`] reads what the tables of a sample table declare
+//! of its samples: their timing, and where their bytes lie, as a data offset
+//! from a [`DataOrigin`] in the container a data reference entry specifies.
+//! [`SampleProperties`] and [`SampleLocation`] hold what it declares of one
+//! sample. The boxes themselves are read and written with [`boxes`], and the
 //! header of a box, the values its fields carry and the traits a box
 //! implements, such as [`BoxDecode`] and [`BoxEncode`], are at the root of
 //! the crate. The [`Error`] at the root is that of reading and writing a box.
@@ -18,7 +21,7 @@ pub mod structure_data;
 /// The boxes of ISO/IEC 14496-12, each read into a value and written back, from `isobmff-boxes`
 pub use isobmff_boxes as boxes;
 pub use isobmff_core::*;
-pub use sample::{SampleLocation, SampleProperties};
+pub use sample::{DataOrigin, SampleLocation, SampleProperties};
 
 /// Where a reader wants input next
 ///

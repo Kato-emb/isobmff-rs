@@ -2,8 +2,6 @@
 
 use isobmff_boxes::SampleFlags;
 
-use crate::structure_data::data_layout::DataOrigin;
-
 /// What the structure-data declares of a `sample`, apart from where its bytes lie
 ///
 /// The fields of a sample a sample table (ISO/IEC 14496-12 §8.5) or a track
@@ -58,4 +56,28 @@ pub struct SampleLocation {
     /// Number of the bytes of the sample, as the sample size table (§8.7.3)
     /// or the track fragment (§8.8.7, §8.8.8) gives it
     pub size: u32,
+}
+
+/// What a data offset counts from, the `data origin`
+///
+/// ISO/IEC 14496-12 §6.1 Table 1 gives the origins of the data offsets of
+/// samples and items, and these are those of samples; for a track fragment,
+/// §8.8.7.1 Table 6 derives which applies.
+// Why not let a caller match every variant: the origins are those a version of
+// the specification sets, and the structure-data resolves them in one place.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DataOrigin {
+    /// The first byte of the file the data reference entry identifies:
+    /// file-relative, §6.1 Table 1 and §8.7.5.3
+    File,
+    /// The first byte of the `MovieFragmentBox` that defines the sample:
+    /// movie-fragment-relative, §6.1 Table 1 and §8.8.7.1 Table 6
+    MovieFragment,
+    /// The first byte of the payload of the `IdentifiedMediaDataBox` the data
+    /// reference entry names, by the `imda_ref_identifier` of a
+    /// `DataEntryImdaBox` or, for a `DataEntrySeqNumImdaBox`, the
+    /// `sequence_number` of the movie fragment: §6.1 Table 1, §8.7.2.1 and
+    /// §8.7.5.3
+    IdentifiedMediaData,
 }

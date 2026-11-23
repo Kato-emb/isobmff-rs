@@ -4,11 +4,9 @@
 //! of a sample table its framing: the chunk it lies in (`stsc`, `stco` or
 //! `co64`), its size (`stsz` or `stz2`), and the sample entry that names the
 //! data reference entry specifying its container (`dref`). [`data_entry`]
-//! looks that entry up, and [`DataOrigin`] says what a data offset counts
-//! from.
+//! looks that entry up.
 
 use core::iter::FusedIterator;
-use core::ops::RangeInclusive;
 use core::slice;
 
 use isobmff_boxes::{
@@ -17,30 +15,7 @@ use isobmff_boxes::{
 };
 
 use super::Error;
-
-/// What a data offset counts from, the `data origin`
-///
-/// ISO/IEC 14496-12 §6.1 Table 1 gives the origins of the data offsets of
-/// samples and items, and these are those of samples; for a track fragment,
-/// §8.8.7.1 Table 6 derives which applies.
-// Why not let a caller match every variant: the origins are those a version of
-// the specification sets, and the structure-data resolves them in one place.
-#[non_exhaustive]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum DataOrigin {
-    /// The first byte of the file the data reference entry identifies:
-    /// file-relative, §6.1 Table 1 and §8.7.5.3
-    File,
-    /// The first byte of the `MovieFragmentBox` that defines the sample:
-    /// movie-fragment-relative, §6.1 Table 1 and §8.8.7.1 Table 6
-    MovieFragment,
-    /// The first byte of the payload of the `IdentifiedMediaDataBox` the data
-    /// reference entry names, by the `imda_ref_identifier` of a
-    /// `DataEntryImdaBox` or, for a `DataEntrySeqNumImdaBox`, the
-    /// `sequence_number` of the movie fragment: §6.1 Table 1, §8.7.2.1 and
-    /// §8.7.5.3
-    IdentifiedMediaData,
-}
+use crate::DataOrigin;
 
 /// Returns the number of the entries of a table of `length` entries, or `u32::MAX` past what a `u32` counts, the width of an `entry_count`
 fn count(length: usize) -> u32 {
@@ -191,12 +166,12 @@ pub(super) fn sample_framings<'a>(
 ) -> SampleFramings<'a> {
     SampleFramings {
         sample_to_chunk: &stsc.entries,
-        chunk_offsets: ChunkOffsets::of(chunk_offset),
+        chunk_offsets: ChunkOffsets::new(chunk_offset),
         chunk_number: 0,
         remaining: 0,
         offset: 0,
-        entry_sizes: EntrySizes::of(sample_size),
-        sample_numbers: 1..=sample_count,
+        entry_sizes: EntrySizes::new(sample_size),
+        sample_count,
     }
 }
 
@@ -217,15 +192,15 @@ pub(super) struct SampleFramings<'a> {
     /// Data offset of the next sample of the current chunk
     offset: u64,
     entry_sizes: EntrySizes<'a>,
-    /// Numbers, from 1, of the samples not yet taken
-    sample_numbers: RangeInclusive<u32>,
+    /// Number of the samples not yet taken
+    sample_count: u32,
 }
 
 impl Iterator for SampleFramings<'_> {
     type Item = SampleFraming;
 
     fn next(&mut self) -> Option<SampleFraming> {
-        self.sample_numbers.next()?;
+        self.sample_count = self.sample_count.checked_sub(1)?;
         // Why the loops end: each chunk opened takes one `chunk_offset`, and
         // each entry passed over shortens `sample_to_chunk`.
         while self.remaining == 0 {
@@ -255,13 +230,13 @@ impl Iterator for SampleFramings<'_> {
         self.remaining = self.remaining.saturating_sub(1);
         match self.offset.checked_add(u64::from(size)) {
             Some(offset) => self.offset = offset,
-            None => self.sample_numbers = RangeInclusive::new(1, 0),
+            None => self.sample_count = 0,
         }
         Some(framing)
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        (0, self.sample_numbers.size_hint().1)
+        (0, usize::try_from(self.sample_count).ok())
     }
 }
 
@@ -270,24 +245,30 @@ impl FusedIterator for SampleFramings<'_> {}
 /// The `chunk_offset` of each chunk, from a chunk offset table of 32 or 64 bits, ISO/IEC 14496-12 §8.7.5
 #[derive(Debug, Clone)]
 enum ChunkOffsets<'a> {
-    Compact(slice::Iter<'a, u32>),
-    Large(slice::Iter<'a, u64>),
+    ChunkOffset(slice::Iter<'a, u32>),
+    ChunkLargeOffset(slice::Iter<'a, u64>),
 }
 
 impl<'a> ChunkOffsets<'a> {
     /// The offsets of `chunk_offset`, or none for a variant this crate does not read
-    fn of(chunk_offset: &'a ChunkOffsetVariant) -> Self {
+    fn new(chunk_offset: &'a ChunkOffsetVariant) -> Self {
         match chunk_offset {
-            ChunkOffsetVariant::ChunkOffset(stco) => Self::Compact(stco.chunk_offsets.iter()),
-            ChunkOffsetVariant::ChunkLargeOffset(co64) => Self::Large(co64.chunk_offsets.iter()),
-            _ => Self::Compact([].iter()),
+            ChunkOffsetVariant::ChunkOffset(stco) => Self::ChunkOffset(stco.chunk_offsets.iter()),
+            ChunkOffsetVariant::ChunkLargeOffset(co64) => {
+                Self::ChunkLargeOffset(co64.chunk_offsets.iter())
+            }
+            _ => Self::ChunkOffset([].iter()),
         }
     }
+}
+
+impl Iterator for ChunkOffsets<'_> {
+    type Item = u64;
 
     fn next(&mut self) -> Option<u64> {
         match self {
-            Self::Compact(offsets) => offsets.next().copied().map(u64::from),
-            Self::Large(offsets) => offsets.next().copied(),
+            Self::ChunkOffset(offsets) => offsets.next().copied().map(u64::from),
+            Self::ChunkLargeOffset(offsets) => offsets.next().copied(),
         }
     }
 }
@@ -301,7 +282,7 @@ enum EntrySizes<'a> {
 
 impl<'a> EntrySizes<'a> {
     /// The sizes `sample_size` gives, or none for a variant this crate does not read
-    fn of(sample_size: &'a SampleSizeVariant) -> Self {
+    fn new(sample_size: &'a SampleSizeVariant) -> Self {
         match sample_size {
             SampleSizeVariant::SampleSize(stsz) => match &stsz.sample_sizes {
                 SampleSizes::Constant { sample_size, .. } => Self::Constant(sample_size.get()),
@@ -312,6 +293,10 @@ impl<'a> EntrySizes<'a> {
             _ => Self::Table([].iter()),
         }
     }
+}
+
+impl Iterator for EntrySizes<'_> {
+    type Item = u32;
 
     fn next(&mut self) -> Option<u32> {
         match self {
@@ -366,7 +351,9 @@ pub(super) fn chunk_count(chunk_offset: &ChunkOffsetVariant) -> Option<u32> {
 /// Each entry gives the chunks from its `first_chunk` to the `first_chunk`
 /// of the next entry, or to the last chunk, `samples_per_chunk` samples
 /// each, ISO/IEC 14496-12 §8.7.4.1. An entry whose run holds no chunk, as
-/// one the `first_chunk` of the next entry is not after, gives none.
+/// one the `first_chunk` of the next entry is not after, gives none, and a run
+/// ends at the last chunk, so an entry whose `first_chunk` is past it gives
+/// none either.
 ///
 /// For a table [`check_sample_to_chunk`] lets through, this is the number of
 /// samples [`sample_framings`] returns, where the sizes do not run out
@@ -384,12 +371,14 @@ pub(super) fn chunk_sample_count(stsc: &SampleToChunkBox, chunk_count: u32) -> u
         .iter()
         .skip(1)
         .map(|next| u64::from(next.first_chunk))
-        .chain([u64::from(chunk_count).saturating_add(1)]);
+        .chain([u64::MAX]);
+    let past_last_chunk = u64::from(chunk_count).saturating_add(1);
     stsc.entries
         .iter()
         .zip(ends)
         .fold(0_u64, |total, (entry, end)| {
-            let chunks = end.saturating_sub(u64::from(entry.first_chunk));
+            let first_chunk = u64::from(entry.first_chunk).min(past_last_chunk);
+            let chunks = end.min(past_last_chunk).saturating_sub(first_chunk);
             total.saturating_add(chunks.saturating_mul(u64::from(entry.samples_per_chunk)))
         })
 }
@@ -466,9 +455,11 @@ mod tests {
     use isobmff_core::{AnyBox, BoxDecode, BoxDefinition, BoxType, Boxes, FourCc, Utf8String};
     use isobmff_test_support::{conformance_files, ffprobe, ffprobe_packets};
 
+    use crate::DataOrigin;
+
     use super::{
-        DataOrigin, Error, SampleFraming, check_sample_to_chunk, chunk_count, chunk_sample_count,
-        sample_count, sample_framings, sample_table_data_origin,
+        Error, SampleFraming, check_sample_to_chunk, chunk_count, chunk_sample_count, sample_count,
+        sample_framings, sample_table_data_origin,
     };
 
     /// `stsc` of the runs of chunks `(first_chunk, samples_per_chunk, sample_description_index)`
@@ -664,7 +655,7 @@ mod tests {
             2 * 2 + 2 * 5
         );
         assert_eq!(chunk_sample_count(&stsc(&[(1, 2, 1), (1, 9, 1)]), 2), 9 * 2);
-        assert_eq!(chunk_sample_count(&stsc(&[(1, 2, 1), (4, 9, 1)]), 2), 2 * 3);
+        assert_eq!(chunk_sample_count(&stsc(&[(1, 2, 1), (4, 9, 1)]), 2), 2 * 2);
         assert_eq!(chunk_sample_count(&stsc(&[]), 2), 0);
         assert_eq!(
             chunk_sample_count(&stsc(&[(1, 1, 1)]), u32::MAX),
@@ -826,12 +817,15 @@ mod tests {
                     *left_out.entry("of no sample").or_default() += 1;
                     continue;
                 }
-                // Why not compare a track whose tables disagree: the sample
-                // table refuses it as the specification reads it.
-                if check_sample_to_chunk(stsc, chunk_count).is_err()
-                    || chunk_sample_count(stsc, chunk_count) != u64::from(sample_count)
-                {
-                    *left_out.entry("whose tables disagree").or_default() += 1;
+                if let Err(error) = check_sample_to_chunk(stsc, chunk_count) {
+                    differences.push(format!("{name} track {track_id}: {error}"));
+                    continue;
+                }
+                let chunk_samples = chunk_sample_count(stsc, chunk_count);
+                if chunk_samples != u64::from(sample_count) {
+                    differences.push(format!(
+                        "{name} track {track_id}: the chunks hold {chunk_samples} samples, the sample size table declares {sample_count}"
+                    ));
                     continue;
                 }
                 // Why compare only the samples of this file: ffprobe reads
