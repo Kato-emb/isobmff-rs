@@ -1,10 +1,15 @@
 //! A file read into its boxes and the location of each sample of its movie, however its bytes are handed over
 
 #[cfg(test)]
+mod common;
+
+#[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use isobmff::boxes::{DataEntry, DataEntryImdaBox, FileTypeBox, MovieBox, SampleToChunkEntry};
     use isobmff::demux::{Error, Event};
-    use isobmff::structure_data::data_layout::DataOrigins;
+    use isobmff::structure_data::data_layout::{DataOrigins, data_entry};
     use isobmff::structure_data::{self, MovieReader};
     use isobmff::{
         BoxDecode, BoxDefinition, BoxHeader, Boxes, Demuxer, DemuxerConfig, SampleLocation,
@@ -12,6 +17,8 @@ mod tests {
     };
     use isobmff_test_support::fixtures::{encoded, movie, track, written};
     use isobmff_test_support::{conformance_files, movie_box};
+
+    use crate::common::compare_with_gpac_and_ffprobe;
 
     /// A movie file whose samples all lie after the `moov`
     const MOVIE_FIRST: &[u8] = include_bytes!("fixtures/movie_moov_first.mp4");
@@ -328,9 +335,61 @@ mod tests {
         }
     }
 
+    /// The locations `events` report, by `track_ID`, each track in decoding order: the demuxer reports them in the order of their offsets, which a stable sort by decoding time undoes within a track
+    fn in_decoding_order(events: &[Event]) -> BTreeMap<u32, Vec<SampleLocation>> {
+        let mut tracks = BTreeMap::<u32, Vec<SampleLocation>>::new();
+        for location in locations(events) {
+            tracks
+                .entry(location.properties.track_id)
+                .or_default()
+                .push(location);
+        }
+        for track in tracks.values_mut() {
+            track.sort_by_key(|location| location.properties.decoding_time);
+        }
+        tracks
+    }
+
+    /// Why the demuxer does not locate the samples of `moov`: a chunk lies in an `imda` an `imdt` names, which the demuxer does not read
+    fn in_an_imda(moov: &MovieBox) -> Option<&'static str> {
+        moov.trak
+            .iter()
+            .any(|trak| {
+                let stbl = &trak.mdia.minf.stbl;
+                let entries = stbl.stsc.iter().flat_map(|stsc| &stsc.entries);
+                entries.into_iter().any(|entry| {
+                    let dref = &trak.mdia.minf.dinf.dref;
+                    let data_entry = data_entry(&stbl.stsd, dref, entry.sample_description_index);
+                    matches!(data_entry, Ok(DataEntry::Imda(_)))
+                })
+            })
+            .then_some("of a chunk in an imda")
+    }
+
+    /// The locations the demuxer reports, checked against the samples GPAC and ffprobe read
+    #[test]
+    #[ignore = "reads the conformance files ISOBMFF_CONFORMANCE_DIR names, and runs ffprobe"]
+    fn the_samples_of_each_track_are_located_where_gpac_and_ffprobe_read_them() {
+        compare_with_gpac_and_ffprobe(in_an_imda, |bytes, _| {
+            let events = read_where_required(bytes, config(None, None));
+            let errors = events
+                .iter()
+                .filter(|event| matches!(event, Event::Error(_)))
+                .collect::<Vec<_>>();
+            if !errors.is_empty() {
+                return Err(format!("{errors:?}"));
+            }
+            if !locations(&events).is_sorted_by_key(|location| location.offset) {
+                return Err(String::from("locations not in the order of their offsets"));
+            }
+            Ok(in_decoding_order(&events))
+        });
+    }
+
+    /// The demuxer composes `MovieReader` and `DataOrigins` as they are: it reports the locations they give, in the order of their offsets
     #[test]
     #[ignore = "reads the conformance files ISOBMFF_CONFORMANCE_DIR names"]
-    fn the_conformance_files_are_located_as_their_sample_tables_declare() {
+    fn the_conformance_files_are_located_as_movie_reader_and_data_origins_locate_them() {
         let (mut files, mut sample_locations, mut refused) = (0, 0, 0);
         let mut differences = Vec::<String>::new();
         for file in conformance_files() {
