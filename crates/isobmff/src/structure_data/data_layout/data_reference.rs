@@ -79,60 +79,16 @@ pub fn data_entry<'a>(
         })
 }
 
-/// Returns the container the data reference entry `data_entry` of the sample entry `sample_description_index` specifies for the samples it describes
+/// Returns the container the data reference entry of the sample entry `sample_description_index` specifies for the samples of a sample table it describes
 ///
 /// A `DataEntryUrlBox` without a location places them in the same file, and
 /// any other `DataEntryUrlBox` or `DataEntryUrnBox` in the resource its URL
-/// or URN identifies, ISO/IEC 14496-12 §6.1 and §8.7.2. A `DataEntryImdaBox`
-/// names the `IdentifiedMediaDataBox` by its `imda_ref_identifier`, and a
-/// `DataEntrySeqNumImdaBox` by the `sequence_number` of the movie fragment
-/// that contains the samples, §8.7.2.1; `sequence_number` is that of the
-/// movie fragment of the samples, or `None` for samples in no movie
-/// fragment. An entry of a type this crate does not read names a resource
-/// other than the same file.
-///
-/// # Errors
-///
-/// * [`SequenceNumberOutsideMovieFragment`](Error::SequenceNumberOutsideMovieFragment):
-///   `data_entry` is a `DataEntrySeqNumImdaBox`, and the samples are in no
-///   movie fragment, §8.7.2.1.
-/// * [`DataEntryNotDecoded`](Error::DataEntryNotDecoded): `data_entry` is a
-///   `DataEntryImdaBox` or a `DataEntrySeqNumImdaBox` that does not decode.
-pub(super) fn media_data_container(
-    data_entry: &DataEntry,
-    sample_description_index: u32,
-    sequence_number: Option<u32>,
-) -> Result<MediaDataContainer, Error> {
-    match data_entry {
-        DataEntry::Imda(imdt) => Ok(MediaDataContainer::IdentifiedMediaData {
-            imda_identifier: imdt.imda_ref_identifier,
-        }),
-        DataEntry::SeqNumImda(_) => sequence_number
-            .map(|imda_identifier| MediaDataContainer::IdentifiedMediaData { imda_identifier })
-            .ok_or(Error::SequenceNumberOutsideMovieFragment {
-                sample_description_index,
-            }),
-        DataEntry::Other(other)
-            if other.box_type() == DataEntryImdaBox::BOX_TYPE
-                || other.box_type() == DataEntrySeqNumImdaBox::BOX_TYPE =>
-        {
-            Err(Error::DataEntryNotDecoded {
-                sample_description_index,
-                box_type: other.box_type(),
-            })
-        }
-        same_file if same_file.is_in_same_file() => Ok(MediaDataContainer::SameFile),
-        DataEntry::Url(_) | DataEntry::Urn(_) | DataEntry::Other(_) | _ => {
-            Ok(MediaDataContainer::Resource)
-        }
-    }
-}
-
-/// Returns the container the samples of a sample table whose sample entry is `sample_description_index` lie in
-///
-/// Their data offsets count from the start of it: from the first byte of the
-/// payload of an `IdentifiedMediaDataBox`, and from the start of the file
-/// otherwise, ISO/IEC 14496-12 §8.7.5.3: "Otherwise, the value of
+/// or URN identifies, ISO/IEC 14496-12 §6.1 and §8.7.2; a `DataEntryImdaBox`
+/// in the `IdentifiedMediaDataBox` of its `imda_ref_identifier`, §8.7.2.1;
+/// and an entry of a type this crate does not read in a resource other than
+/// the same file. Their data offsets count from the start of the container:
+/// from the first byte of the payload of an `IdentifiedMediaDataBox`, and
+/// from the start of the file otherwise, §8.7.5.3: "Otherwise, the value of
 /// `chunk_offset` is relative to the start of the containing media file".
 ///
 /// # Errors
@@ -149,11 +105,27 @@ pub(in crate::structure_data) fn sample_table_container(
     dref: &DataReferenceBox,
     sample_description_index: u32,
 ) -> Result<MediaDataContainer, Error> {
-    media_data_container(
-        data_entry(stsd, dref, sample_description_index)?,
-        sample_description_index,
-        None,
-    )
+    match data_entry(stsd, dref, sample_description_index)? {
+        DataEntry::Imda(imdt) => Ok(MediaDataContainer::IdentifiedMediaData {
+            imda_identifier: imdt.imda_ref_identifier,
+        }),
+        DataEntry::SeqNumImda(_) => Err(Error::SequenceNumberOutsideMovieFragment {
+            sample_description_index,
+        }),
+        DataEntry::Other(other)
+            if other.box_type() == DataEntryImdaBox::BOX_TYPE
+                || other.box_type() == DataEntrySeqNumImdaBox::BOX_TYPE =>
+        {
+            Err(Error::DataEntryNotDecoded {
+                sample_description_index,
+                box_type: other.box_type(),
+            })
+        }
+        same_file if same_file.is_in_same_file() => Ok(MediaDataContainer::SameFile),
+        DataEntry::Url(_) | DataEntry::Urn(_) | DataEntry::Other(_) | _ => {
+            Ok(MediaDataContainer::Resource)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -169,7 +141,7 @@ mod tests {
 
     use crate::MediaDataContainer;
 
-    use super::{Error, media_data_container, sample_table_container};
+    use super::{Error, sample_table_container};
 
     /// `stsd` of one sample entry, and `dref` of `data_entry` alone
     fn track_of(data_entry: DataEntry) -> (SampleDescriptionBox, DataReferenceBox) {
@@ -225,35 +197,6 @@ mod tests {
                 sample_description_index: 2,
                 sample_entry_count: 1
             })
-        );
-    }
-
-    #[test]
-    fn an_entry_names_its_imda_by_identifier_or_by_the_sequence_number_of_its_movie_fragment() {
-        let mut imdt = DataEntryImdaBox::default();
-        imdt.imda_ref_identifier = 7;
-        let (imdt, snim, url) = (
-            DataEntry::Imda(imdt),
-            DataEntry::SeqNumImda(DataEntrySeqNumImdaBox::default()),
-            DataEntry::Url(DataEntryUrlBox::default()),
-        );
-        assert_eq!(
-            [
-                media_data_container(&imdt, 1, None),
-                media_data_container(&imdt, 1, Some(3)),
-                media_data_container(&snim, 1, Some(3)),
-                media_data_container(&url, 1, Some(3)),
-                media_data_container(&snim, 2, None),
-            ],
-            [
-                Ok(MediaDataContainer::IdentifiedMediaData { imda_identifier: 7 }),
-                Ok(MediaDataContainer::IdentifiedMediaData { imda_identifier: 7 }),
-                Ok(MediaDataContainer::IdentifiedMediaData { imda_identifier: 3 }),
-                Ok(MediaDataContainer::SameFile),
-                Err(Error::SequenceNumberOutsideMovieFragment {
-                    sample_description_index: 2
-                }),
-            ]
         );
     }
 

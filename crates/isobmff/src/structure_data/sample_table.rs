@@ -17,7 +17,7 @@ use isobmff_core::BoxDefinition;
 use super::Error;
 use super::data_layout::{self, ChunkSamples};
 use super::timeline::{self, SampleTimings};
-use crate::{DataOrigin, MediaDataContainer, SampleLocation, SampleProperties};
+use crate::{DataOrigin, SampleLocation, SampleProperties};
 
 /// Returns the location of each sample the `sample table` `stbl` of track `track_id` declares, in decoding order, once its tables agree with each other as the specification reads them
 ///
@@ -132,10 +132,6 @@ impl Iterator for Samples<'_> {
             chunk_sample.sample_description_index,
         )
         .ok()?;
-        let data_origin = match container {
-            MediaDataContainer::IdentifiedMediaData { .. } => DataOrigin::IdentifiedMediaData,
-            MediaDataContainer::SameFile | MediaDataContainer::Resource => DataOrigin::File,
-        };
         Some(SampleLocation {
             properties: SampleProperties {
                 track_id: self.track_id,
@@ -146,7 +142,7 @@ impl Iterator for Samples<'_> {
                 sample_description_index: chunk_sample.sample_description_index,
             },
             container,
-            data_origin,
+            data_origin: DataOrigin::Container,
             offset: chunk_sample.offset,
             size: chunk_sample.size,
         })

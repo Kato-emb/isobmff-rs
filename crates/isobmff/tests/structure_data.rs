@@ -15,7 +15,6 @@ mod tests {
         SampleFlags, SampleSizeBox, SampleSizeVariant, SampleSizes, SampleToChunkBox,
         SampleToChunkEntry, SyncSampleBox, TimeToSampleBox, TrackBox,
     };
-    use isobmff::structure_data::data_layout::data_entry;
     use isobmff::structure_data::{Error, MovieReader};
     use isobmff::{
         BoxDefinition, BoxType, DataOrigin, FourCc, MediaDataContainer, SampleLocation,
@@ -44,7 +43,7 @@ mod tests {
                 sample_description_index: 1,
             },
             container: MediaDataContainer::SameFile,
-            data_origin: DataOrigin::File,
+            data_origin: DataOrigin::Container,
             offset,
             size,
         }
@@ -512,7 +511,7 @@ mod tests {
             for trak in &moov.trak {
                 let track_id = trak.tkhd.track_id;
                 let ours = ours.get(&track_id).map(Vec::as_slice).unwrap_or_default();
-                let (stbl, dref) = (&trak.mdia.minf.stbl, &trak.mdia.minf.dinf.dref);
+                let stbl = &trak.mdia.minf.stbl;
                 let declared = match &stbl.sample_size {
                     Some(SampleSizeVariant::SampleSize(stsz)) => match &stsz.sample_sizes {
                         SampleSizes::Constant { sample_count, .. } => {
@@ -530,56 +529,38 @@ mod tests {
                         ours.len()
                     ));
                 }
-                if let Some(location) = ours.iter().find(|location| {
-                    let origin = match data_entry(
-                        &stbl.stsd,
-                        dref,
-                        location.properties.sample_description_index,
-                    ) {
-                        Ok(DataEntry::Imda(_) | DataEntry::SeqNumImda(_)) => {
-                            Some(DataOrigin::IdentifiedMediaData)
-                        }
-                        Ok(_) => Some(DataOrigin::File),
-                        Err(_) => None,
-                    };
-                    origin != Some(location.data_origin)
-                }) {
-                    differences.push(format!(
-                        "{name} track {track_id}: {location:?} counts from another data origin than its data reference entry gives"
-                    ));
-                }
                 if let Some(containers) = gpac_containers
                     .as_ref()
                     .and_then(|containers| containers.get(&track_id))
                     && !ours.is_empty()
                 {
+                    let by_sample_entry = stbl
+                        .stsd
+                        .sample_descriptions
+                        .iter()
+                        .map(|sample_entry| {
+                            let index = usize::from(sample_entry.data_reference_index()?);
+                            *containers.get(index.checked_sub(1)?)?
+                        })
+                        .collect::<Vec<_>>();
                     let theirs = ours
                         .iter()
                         .map(|location| {
-                            let index = stbl
-                                .stsd
-                                .sample_descriptions
-                                .get(
-                                    usize::try_from(location.properties.sample_description_index)
-                                        .ok()?
-                                        .checked_sub(1)?,
-                                )?
-                                .data_reference_index()?;
-                            *containers.get(usize::from(index).checked_sub(1)?)?
+                            let index =
+                                usize::try_from(location.properties.sample_description_index);
+                            *by_sample_entry.get(index.ok()?.checked_sub(1)?)?
                         })
                         .collect::<Vec<_>>();
-                    if let Some(sample) = ours
+                    let ours = ours
                         .iter()
-                        .zip(&theirs)
-                        .position(|(ours, theirs)| Some(ours.container) != *theirs)
-                    {
+                        .map(|location| Some(location.container))
+                        .collect::<Vec<_>>();
+                    if ours != theirs {
                         differences.push(format!(
-                            "{name} track {track_id}: sample {sample} {:?}, GPAC's data reference entry {:?}",
-                            ours.get(sample),
-                            theirs.get(sample)
+                            "{name} track {track_id}: containers {ours:?}, GPAC's data reference entries {theirs:?}"
                         ));
                     }
-                    contained.add(true, ours.len());
+                    contained.add(report.is_some(), ours.len());
                 }
                 if let Some(gpac) = &gpac
                     && gpac.get(&track_id) != Some(&ours.len())
@@ -594,11 +575,9 @@ mod tests {
                     left_out.push((name.clone(), Some(track_id), "of no sample"));
                     continue;
                 }
-                let entries = stbl.stsc.iter().flat_map(|stsc| &stsc.entries);
-                let is_elsewhere = entries.into_iter().any(|entry| {
-                    data_entry(&stbl.stsd, dref, entry.sample_description_index)
-                        .is_ok_and(|data_entry| !data_entry.is_in_same_file())
-                });
+                let is_elsewhere = ours
+                    .iter()
+                    .any(|location| location.container != MediaDataContainer::SameFile);
                 let Some(packets) = &packets else {
                     left_out.push((
                         name.clone(),

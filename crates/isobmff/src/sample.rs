@@ -47,9 +47,9 @@ pub struct SampleLocation {
     /// Where the bytes of the sample lie, as the data reference entry of its
     /// sample entry specifies, §6.1 and §8.7.2
     pub container: MediaDataContainer,
-    /// What `offset` counts from, which the data reference entry sets for a
-    /// sample table, §6.1 Table 1, and the track fragment header with it for
-    /// a track fragment, §8.8.7.1 Table 6
+    /// What `offset` counts from: the start of the `container` for a sample
+    /// table, §8.7.5.3, and as the track fragment header sets it for a track
+    /// fragment, §8.8.7.1 Table 6
     pub data_origin: DataOrigin,
     /// Data offset of the first byte of the sample, from the `data_origin`:
     /// the start of its chunk (§8.7.5) or of the data of its track fragment
@@ -101,16 +101,15 @@ pub enum MediaDataContainer {
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DataOrigin {
-    /// The first byte of the file the data reference entry identifies:
-    /// file-relative, §6.1 Table 1 and §8.7.5.3
-    File,
+    /// The start of the container of the sample: the first byte of the file
+    /// the data reference entry identifies, file-relative, or of the payload
+    /// of the `IdentifiedMediaDataBox` it names,
+    /// IdentifiedMediaDataBox-relative: §6.1 Table 1, §8.7.5.3 and §8.8.7.1
+    /// Table 6
+    Container,
     /// The first byte of the `MovieFragmentBox` that defines the sample:
-    /// movie-fragment-relative, §6.1 Table 1 and §8.8.7.1 Table 6
+    /// movie-fragment-relative, §6.1 Table 1 and §8.8.7.1 Table 6; a track
+    /// fragment whose data offsets count from the end of the data of the
+    /// track fragment before it is read as counting from where that one does
     MovieFragment,
-    /// The first byte of the payload of the `IdentifiedMediaDataBox` the data
-    /// reference entry names, by the `imda_ref_identifier` of a
-    /// `DataEntryImdaBox` or, for a `DataEntrySeqNumImdaBox`, the
-    /// `sequence_number` of the movie fragment: §6.1 Table 1, §8.7.2.1 and
-    /// §8.7.5.3
-    IdentifiedMediaData,
 }

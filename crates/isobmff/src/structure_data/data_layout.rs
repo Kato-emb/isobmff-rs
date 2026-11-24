@@ -4,7 +4,8 @@
 //! of a sample table the chunk it lies in (`stsc`, `stco` or `co64`), its
 //! size (`stsz` or `stz2`), and the sample entry that names the data
 //! reference entry specifying its container (`dref`). [`data_entry`] looks
-//! that entry up. The data offset of a sample counts from a data origin,
+//! that entry up, and the location of a sample names the container it
+//! specifies. The data offset of a sample counts from a data origin,
 //! §6.1 Table 1, which its location names; [`DataOrigins`] takes where the
 //! data origins of a file lie, and turns each location into one at its file
 //! offset.

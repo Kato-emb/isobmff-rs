@@ -153,23 +153,6 @@ pub enum Error {
         /// `imda_identifier` of the `IdentifiedMediaDataBox`
         imda_identifier: u32,
     },
-    /// A sample counts its data offset from another data origin than the
-    /// data reference entry of its sample entry gives, ISO/IEC 14496-12 §6.1
-    /// Table 1 and §8.7.2.1
-    ///
-    /// A location a [`MovieReader`](super::MovieReader) returns never
-    /// disagrees so with the entry [`data_entry`](super::data_layout::data_entry)
-    /// looks up for it; a location handed over with the entry of another
-    /// sample entry can.
-    DataOriginMismatch {
-        /// `sample_description_index`, from 1, of the sample entry
-        sample_description_index: u32,
-        /// `imda_identifier` of the `IdentifiedMediaDataBox` the data
-        /// reference entry places the media data in, or `None` where it places
-        /// it in none: the sample counted from the start of its file where it
-        /// is `Some`, and from an `IdentifiedMediaDataBox` where it is `None`
-        imda_identifier: Option<u32>,
-    },
     /// The end of the bytes of a sample, the file offset just past the last of them, is past what a `u64` counts
     ///
     /// The file offset of the data origin of the sample, added to its data
@@ -285,20 +268,6 @@ impl fmt::Display for Error {
                 formatter,
                 "a sample lies in the IdentifiedMediaDataBox of imda_identifier {imda_identifier}, which has not been read"
             ),
-            Self::DataOriginMismatch {
-                sample_description_index,
-                imda_identifier: Some(imda_identifier),
-            } => write!(
-                formatter,
-                "a sample of sample entry {sample_description_index} counts from the start of its file, though its data reference entry places it in the IdentifiedMediaDataBox of imda_identifier {imda_identifier}"
-            ),
-            Self::DataOriginMismatch {
-                sample_description_index,
-                imda_identifier: None,
-            } => write!(
-                formatter,
-                "a sample of sample entry {sample_description_index} counts from an IdentifiedMediaDataBox, though its data reference entry places it in none"
-            ),
             Self::FileOffsetOverflow {
                 data_origin_offset,
                 offset,
@@ -336,7 +305,6 @@ impl core::error::Error for Error {
             | Self::DataEntryNotDecoded { .. }
             | Self::MovieFragmentPositionMissing
             | Self::IdentifiedMediaDataNotRead { .. }
-            | Self::DataOriginMismatch { .. }
             | Self::FileOffsetOverflow { .. } => None,
         }
     }
