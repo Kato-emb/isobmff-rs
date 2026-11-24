@@ -13,6 +13,7 @@ mod tests {
         AnyBox, BoxType, DataOrigin, FourCc, MediaDataContainer, SampleLocation, SampleProperties,
         Utf8String,
     };
+    use isobmff_test_support::fixtures::{movie, track};
     use isobmff_test_support::{conformance_files, fixture_movie_box, gpac_children, gpac_list};
 
     /// `stsd` of sample entries of the `data_reference_index`es `data_reference_indexes`
@@ -260,7 +261,13 @@ mod tests {
             (
                 "external_movie.mp4",
                 [
-                    (1, 12, MediaDataContainer::Resource),
+                    (
+                        1,
+                        12,
+                        MediaDataContainer::Resource {
+                            data_reference_index: 1,
+                        },
+                    ),
                     (2, 58, MediaDataContainer::SameFile),
                 ],
             ),
@@ -288,6 +295,37 @@ mod tests {
                 "{name}"
             );
         }
+    }
+
+    #[test]
+    fn the_samples_of_a_track_lie_in_the_resource_their_sample_entry_names() {
+        let mut trak = track(
+            1,
+            10,
+            &[4, 4, 4],
+            &[(1, 1), (2, 1), (3, 1)],
+            &[100, 200, 300],
+        );
+        let stbl = &mut trak.mdia.minf.stbl;
+        stbl.stsd = stsd(&[1, 2, 2]);
+        for (entry, sample_description_index) in
+            stbl.stsc.as_mut().unwrap().entries.iter_mut().zip(1..)
+        {
+            entry.sample_description_index = sample_description_index;
+        }
+        let url = |location: &str| {
+            let mut url = DataEntryUrlBox::default();
+            url.location = Some(Utf8String::new(String::from(location)).unwrap());
+            DataEntry::Url(url)
+        };
+        trak.mdia.minf.dinf.dref = dref(vec![url("a.mp4"), url("b.mp4")]);
+        let resource = |data_reference_index| MediaDataContainer::Resource {
+            data_reference_index,
+        };
+        assert_eq!(
+            tracks_of(&locations_of(&movie([trak]))),
+            [(1, 1, resource(1)), (1, 2, resource(2))]
+        );
     }
 
     #[test]
@@ -333,7 +371,10 @@ mod tests {
 
     #[test]
     fn each_sample_counts_from_its_data_origin_in_its_container() {
-        let (same_file, resource) = (MediaDataContainer::SameFile, MediaDataContainer::Resource);
+        let same_file = MediaDataContainer::SameFile;
+        let resource = MediaDataContainer::Resource {
+            data_reference_index: 2,
+        };
         let imda = MediaDataContainer::IdentifiedMediaData { imda_identifier: 7 };
         let containers = [same_file, resource, imda];
         let not_read = Err(Error::IdentifiedMediaDataNotRead { imda_identifier: 7 });

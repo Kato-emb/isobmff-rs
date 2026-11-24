@@ -79,7 +79,16 @@ pub enum MediaDataContainer {
     /// A resource other than the same file: one a `DataEntryUrlBox` or a
     /// `DataEntryUrnBox` identifies by its URL or URN, or one a data
     /// reference entry of a type this crate does not read names
-    Resource,
+    ///
+    /// The data reference entry is the `data_reference_index`-th, from 1, of
+    /// the `dref` of the track of the sample, §8.5.2.3: two samples whose
+    /// container is equal lie in the same resource where they are of the same
+    /// track, whereas an `imda_identifier` names one `IdentifiedMediaDataBox`
+    /// in the whole file.
+    Resource {
+        /// `data_reference_index` of the sample entry of the sample, §8.5.2.2
+        data_reference_index: u16,
+    },
     /// The `IdentifiedMediaDataBox` whose `imda_identifier` is
     /// `imda_identifier`: the `imda_ref_identifier` of a `DataEntryImdaBox`,
     /// or, for a `DataEntrySeqNumImdaBox`, the `sequence_number` of the movie

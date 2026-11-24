@@ -55,6 +55,19 @@ pub fn data_entry<'a>(
     dref: &'a DataReferenceBox,
     sample_description_index: u32,
 ) -> Result<&'a DataEntry, Error> {
+    indexed_data_entry(stsd, dref, sample_description_index).map(|(_, data_entry)| data_entry)
+}
+
+/// Returns the data reference entry the sample entry `sample_description_index` of `stsd` names in `dref`, with the `data_reference_index` that names it
+///
+/// # Errors
+///
+/// * The failures of [`data_entry`].
+fn indexed_data_entry<'a>(
+    stsd: &SampleDescriptionBox,
+    dref: &'a DataReferenceBox,
+    sample_description_index: u32,
+) -> Result<(u16, &'a DataEntry), Error> {
     let sample_entry = usize::try_from(sample_description_index)
         .ok()
         .and_then(|index| index.checked_sub(1))
@@ -69,14 +82,15 @@ pub fn data_entry<'a>(
             .ok_or(Error::DataReferenceIndexMissing {
                 sample_description_index,
             })?;
-    usize::from(data_reference_index)
+    let data_entry = usize::from(data_reference_index)
         .checked_sub(1)
         .and_then(|index| dref.data_entries.get(index))
         .ok_or(Error::DataReferenceIndexOutOfRange {
             sample_description_index,
             data_reference_index,
             data_entry_count: u32::try_from(dref.data_entries.len()).unwrap_or(u32::MAX),
-        })
+        })?;
+    Ok((data_reference_index, data_entry))
 }
 
 /// Returns the container the data reference entry of the sample entry `sample_description_index` specifies for the samples of a sample table it describes
@@ -86,7 +100,8 @@ pub fn data_entry<'a>(
 /// or URN identifies, ISO/IEC 14496-12 §6.1 and §8.7.2; a `DataEntryImdaBox`
 /// in the `IdentifiedMediaDataBox` of its `imda_ref_identifier`, §8.7.2.1;
 /// and an entry of a type this crate does not read in a resource other than
-/// the same file. Their data offsets count from the start of the container:
+/// the same file. A resource is named by the `data_reference_index` of the
+/// sample entry, §8.5.2.3. Their data offsets count from the start of the container:
 /// from the first byte of the payload of an `IdentifiedMediaDataBox`, and
 /// from the start of the file otherwise, §8.7.5.3: "Otherwise, the value of
 /// `chunk_offset` is relative to the start of the containing media file".
@@ -105,7 +120,9 @@ pub(in crate::structure_data) fn sample_table_container(
     dref: &DataReferenceBox,
     sample_description_index: u32,
 ) -> Result<MediaDataContainer, Error> {
-    match data_entry(stsd, dref, sample_description_index)? {
+    let (data_reference_index, data_entry) =
+        indexed_data_entry(stsd, dref, sample_description_index)?;
+    match data_entry {
         DataEntry::Imda(imdt) => Ok(MediaDataContainer::IdentifiedMediaData {
             imda_identifier: imdt.imda_ref_identifier,
         }),
@@ -123,7 +140,9 @@ pub(in crate::structure_data) fn sample_table_container(
         }
         same_file if same_file.is_in_same_file() => Ok(MediaDataContainer::SameFile),
         DataEntry::Url(_) | DataEntry::Urn(_) | DataEntry::Other(_) | _ => {
-            Ok(MediaDataContainer::Resource)
+            Ok(MediaDataContainer::Resource {
+                data_reference_index,
+            })
         }
     }
 }
@@ -181,9 +200,15 @@ mod tests {
             ],
             [
                 Ok(MediaDataContainer::SameFile),
-                Ok(MediaDataContainer::Resource),
-                Ok(MediaDataContainer::Resource),
-                Ok(MediaDataContainer::Resource),
+                Ok(MediaDataContainer::Resource {
+                    data_reference_index: 1
+                }),
+                Ok(MediaDataContainer::Resource {
+                    data_reference_index: 1
+                }),
+                Ok(MediaDataContainer::Resource {
+                    data_reference_index: 1
+                }),
                 Ok(MediaDataContainer::IdentifiedMediaData { imda_identifier: 7 }),
                 Err(Error::SequenceNumberOutsideMovieFragment {
                     sample_description_index: 1

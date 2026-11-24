@@ -415,13 +415,16 @@ mod tests {
                     .map(gpac_list)
                     .unwrap_or_default()
                     .into_iter()
-                    .map(|entry| {
+                    .zip(1..)
+                    .map(|(entry, data_reference_index)| {
                         match (
                             entry.get("@Type").and_then(Value::as_str),
                             entry.get("@Flags").and_then(Value::as_str),
                         ) {
                             (Some("url "), Some("1")) => Some(MediaDataContainer::SameFile),
-                            (Some("url " | "urn "), _) => Some(MediaDataContainer::Resource),
+                            (Some("url " | "urn "), _) => Some(MediaDataContainer::Resource {
+                                data_reference_index,
+                            }),
                             _ => None,
                         }
                     })

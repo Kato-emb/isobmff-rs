@@ -113,7 +113,7 @@ impl DataOrigins {
             }
             (
                 DataOrigin::Container,
-                MediaDataContainer::SameFile | MediaDataContainer::Resource,
+                MediaDataContainer::SameFile | MediaDataContainer::Resource { .. },
             ) => {
                 return Ok(location);
             }
@@ -122,7 +122,7 @@ impl DataOrigins {
             }
             (
                 DataOrigin::MovieFragment,
-                container @ (MediaDataContainer::SameFile | MediaDataContainer::Resource),
+                container @ (MediaDataContainer::SameFile | MediaDataContainer::Resource { .. }),
             ) => container,
         };
         let moof_offset = self
