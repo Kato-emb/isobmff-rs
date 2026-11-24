@@ -72,9 +72,8 @@ pub struct SampleLocation {
 pub enum MediaDataContainer {
     /// The same file where the data reference entry is present: as read, a
     /// `DataEntryUrlBox` whose flags say so, §8.7.2.3; as put at its file
-    /// offset, also a sample whose data offset counted from a
-    /// `MovieFragmentBox` or from the payload of an `IdentifiedMediaDataBox`
-    /// of the file
+    /// offset, also a sample that lay in an `IdentifiedMediaDataBox` of the
+    /// file, whatever its data offset counted from
     SameFile,
     /// A resource other than the same file: one a `DataEntryUrlBox` or a
     /// `DataEntryUrnBox` identifies by its URL or URN, or one a data

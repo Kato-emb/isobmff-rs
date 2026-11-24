@@ -15,6 +15,7 @@ mod tests {
         SampleFlags, SampleSizeBox, SampleSizeVariant, SampleSizes, SampleToChunkBox,
         SampleToChunkEntry, SyncSampleBox, TimeToSampleBox, TrackBox,
     };
+    use isobmff::structure_data::data_layout::data_entry;
     use isobmff::structure_data::{Error, MovieReader};
     use isobmff::{
         BoxDefinition, BoxType, DataOrigin, FourCc, MediaDataContainer, SampleLocation,
@@ -514,7 +515,7 @@ mod tests {
             for trak in &moov.trak {
                 let track_id = trak.tkhd.track_id;
                 let ours = ours.get(&track_id).map(Vec::as_slice).unwrap_or_default();
-                let stbl = &trak.mdia.minf.stbl;
+                let (stbl, dref) = (&trak.mdia.minf.stbl, &trak.mdia.minf.dinf.dref);
                 let declared = match &stbl.sample_size {
                     Some(SampleSizeVariant::SampleSize(stsz)) => match &stsz.sample_sizes {
                         SampleSizes::Constant { sample_count, .. } => {
@@ -578,9 +579,11 @@ mod tests {
                     left_out.push((name.clone(), Some(track_id), "of no sample"));
                     continue;
                 }
-                let is_elsewhere = ours
-                    .iter()
-                    .any(|location| location.container != MediaDataContainer::SameFile);
+                let entries = stbl.stsc.iter().flat_map(|stsc| &stsc.entries);
+                let is_elsewhere = entries.into_iter().any(|entry| {
+                    data_entry(&stbl.stsd, dref, entry.sample_description_index)
+                        .is_ok_and(|data_entry| !data_entry.is_in_same_file())
+                });
                 let Some(packets) = &packets else {
                     left_out.push((
                         name.clone(),

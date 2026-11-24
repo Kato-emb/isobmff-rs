@@ -101,10 +101,7 @@ fn indexed_data_entry<'a>(
 /// in the `IdentifiedMediaDataBox` of its `imda_ref_identifier`, §8.7.2.1;
 /// and an entry of a type this crate does not read in a resource other than
 /// the same file. A resource is named by the `data_reference_index` of the
-/// sample entry, §8.5.2.3. Their data offsets count from the start of the container:
-/// from the first byte of the payload of an `IdentifiedMediaDataBox`, and
-/// from the start of the file otherwise, §8.7.5.3: "Otherwise, the value of
-/// `chunk_offset` is relative to the start of the containing media file".
+/// sample entry, §8.5.2.3.
 ///
 /// # Errors
 ///

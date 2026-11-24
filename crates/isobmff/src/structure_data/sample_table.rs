@@ -23,8 +23,9 @@ use crate::{DataOrigin, SampleLocation, SampleProperties};
 ///
 /// The `sample table`, ISO/IEC 14496-12 §3.1.50 and §8.5
 ///
-/// `dref` is the data reference table of the track. The checks go in this
-/// order, and the first that fails is returned.
+/// `dref` is the data reference table of the track. The data offset of each
+/// sample counts from the start of its container, §8.7.5.3. The checks go in
+/// this order, and the first that fails is returned.
 ///
 /// # Errors
 ///
