@@ -105,8 +105,9 @@ impl MovieReader {
     ///   not in strictly increasing order of sample number, §8.6.2.1; where
     ///   the sample entry of a sample names no data reference entry, §8.5.2.3,
     ///   one whose samples are each in a movie fragment, §8.7.2.1, or one of an
-    ///   `IdentifiedMediaDataBox` that does not decode; and where the bytes of
-    ///   a sample end past the last data offset.
+    ///   `IdentifiedMediaDataBox` that does not decode; and where the end of
+    ///   the bytes of a sample, the data offset just past the last of them, is
+    ///   past what a `u64` counts.
     pub fn handle_movie<'a>(&mut self, movie: &'a MovieBox) -> Result<SampleLocations<'a>, Error> {
         let tracks = movie
             .trak

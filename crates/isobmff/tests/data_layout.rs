@@ -399,32 +399,32 @@ mod tests {
     }
 
     #[test]
-    fn a_refused_sample_past_the_last_file_offset_leaves_the_origins_as_they_were() {
+    fn a_sample_is_refused_where_its_end_is_past_what_a_u64_counts_and_the_origins_stay() {
         let same_file = DataEntry::Url(DataEntryUrlBox::default());
         let mut data_origins = DataOrigins::new();
-        data_origins.handle_movie_fragment(u64::MAX - 120, 1);
+        data_origins.handle_movie_fragment(u64::MAX - 116, 1);
         let mut past = location(DataOrigin::MovieFragment);
-        past.size = 105;
+        past.size = 101;
         assert_eq!(
             data_origins.handle_location(past, &same_file),
             Err(Error::FileOffsetOverflow {
-                data_origin_offset: u64::MAX - 120,
+                data_origin_offset: u64::MAX - 116,
                 offset: 16,
-                size: 105
+                size: 101
             })
         );
         past.offset = u64::MAX;
         assert_eq!(
             data_origins.handle_location(past, &same_file),
             Err(Error::FileOffsetOverflow {
-                data_origin_offset: u64::MAX - 120,
+                data_origin_offset: u64::MAX - 116,
                 offset: u64::MAX,
-                size: 105
+                size: 101
             })
         );
         assert_eq!(
             data_origins.handle_location(location(DataOrigin::MovieFragment), &same_file),
-            Ok(at_file_offset(u64::MAX - 104))
+            Ok(at_file_offset(u64::MAX - 100))
         );
     }
 

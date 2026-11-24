@@ -120,8 +120,9 @@ impl DataOrigins {
     /// * [`MovieFragmentPositionMissing`](Error::MovieFragmentPositionMissing):
     ///   `location` counts from a movie fragment, and no `moof` was taken.
     /// * [`FileOffsetOverflow`](Error::FileOffsetOverflow): `location` counts
-    ///   from a movie fragment, and the bytes of the sample end past the last
-    ///   file offset once the offset of the `moof` is added.
+    ///   from a movie fragment, and the end of its bytes, the file offset just
+    ///   past the last of them, is past what a `u64` counts once the offset of
+    ///   the `moof` is added.
     /// * [`IdentifiedMediaDataNotRead`](Error::IdentifiedMediaDataNotRead):
     ///   `location` counts from an `IdentifiedMediaDataBox`, none of which is
     ///   taken.
@@ -147,9 +148,10 @@ impl DataOrigins {
                 let movie_fragment = self
                     .movie_fragment
                     .ok_or(Error::MovieFragmentPositionMissing)?;
-                // Why check the end as well as the start: a start within a
-                // `u64` lets through a sample whose last byte lies past
-                // `u64::MAX`, at no file offset.
+                // Why check the end, the offset just past the last byte, and
+                // not the start alone: the byte range of a sample is taken up
+                // to its end, which must be a `u64`, so a sample whose last
+                // byte is at `u64::MAX` is refused too.
                 let offset = movie_fragment
                     .offset
                     .checked_add(location.offset)

@@ -45,7 +45,7 @@ pub enum Error {
         /// `sample_count` of the sample size table
         sample_count: u32,
     },
-    /// The bytes of a sample end past the last data offset a `u64` counts
+    /// The end of the bytes of a sample, the data offset just past the last of them, is past what a `u64` counts
     DataOffsetOverflow {
         /// `sample number`, from 1, of the sample, ISO/IEC 14496-12 §3.1.49
         sample_number: u32,
@@ -170,8 +170,10 @@ pub enum Error {
         /// is `Some`, and from an `IdentifiedMediaDataBox` where it is `None`
         imda_identifier: Option<u32>,
     },
-    /// The bytes of a sample, at a data offset from a data origin at a file
-    /// offset, end past the last file offset a `u64` counts
+    /// The end of the bytes of a sample, the file offset just past the last of them, is past what a `u64` counts
+    ///
+    /// The file offset of the data origin of the sample, added to its data
+    /// offset and its size, gives the end.
     FileOffsetOverflow {
         /// File offset of the data origin
         data_origin_offset: u64,
@@ -209,7 +211,7 @@ impl fmt::Display for Error {
                 size,
             } => write!(
                 formatter,
-                "sample {sample_number} at data offset {offset} has size {size}, which ends past the last data offset"
+                "sample {sample_number} at data offset {offset} has size {size}, so the data offset just past its last byte is past what a u64 counts"
             ),
             Self::SyncSampleNumberOutOfRange {
                 entry,
@@ -303,7 +305,7 @@ impl fmt::Display for Error {
                 size,
             } => write!(
                 formatter,
-                "a sample at data offset {offset} from a data origin at file offset {data_origin_offset} has size {size}, which ends past the last file offset"
+                "a sample at data offset {offset} from a data origin at file offset {data_origin_offset} has size {size}, so the file offset just past its last byte is past what a u64 counts"
             ),
             Self::SequenceNumberOutsideMovieFragment {
                 sample_description_index,

@@ -239,8 +239,7 @@ mod tests {
     }
 
     #[test]
-    fn a_data_reference_a_sample_table_cannot_use_is_reported_before_a_sample_past_the_last_data_offset()
-     {
+    fn a_data_reference_is_reported_before_a_sample_whose_end_is_past_a_u64() {
         let mut trak = track(1, 1, &[10, 1], &[(1, 1), (2, 1)], &[0, 0]);
         let mut co64 = ChunkLargeOffsetBox::default();
         co64.chunk_offsets = vec![u64::MAX - 5, 0];
@@ -270,7 +269,7 @@ mod tests {
     }
 
     #[test]
-    fn a_sample_whose_bytes_end_past_the_last_data_offset_is_refused() {
+    fn a_sample_whose_end_is_past_what_a_u64_counts_is_refused() {
         let mut trak = track(1, 1, &[1, 10, 1], &[(1, 2), (2, 1)], &[0, 0]);
         let mut co64 = ChunkLargeOffsetBox::default();
         co64.chunk_offsets = vec![u64::MAX - 5, 0];

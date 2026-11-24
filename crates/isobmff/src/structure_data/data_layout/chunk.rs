@@ -42,9 +42,9 @@ pub(in crate::structure_data) struct ChunkSample {
 /// refuses such entries. A chunk of no sample is passed over.
 ///
 /// The samples end where the chunks, the sizes or the entries of `stsc` do,
-/// if those declare fewer. Where the bytes of a sample end past what a `u64`
-/// counts, that sample is returned, at its offset, and the samples end after
-/// it. A variant of the chunk offset table or the sample size table this
+/// if those declare fewer. Where the end of the bytes of a sample, the data
+/// offset just past the last of them, is past what a `u64` counts, that
+/// sample is returned, at its offset, and the samples end after it. A variant of the chunk offset table or the sample size table this
 /// crate does not read declares no sample.
 pub(in crate::structure_data) fn chunk_samples<'a>(
     stsc: &'a SampleToChunkBox,
@@ -148,7 +148,7 @@ pub(in crate::structure_data) fn sample_description_indices<'a>(
     })
 }
 
-/// Refuses the first `sample_count` samples the tables declare where their bytes end past the last data offset
+/// Refuses the first `sample_count` samples the tables declare where the end of the bytes of one, the data offset just past the last of them, is past what a `u64` counts
 ///
 /// The tables are read as [`chunk_samples`] reads them, for a
 /// sample-to-chunk table [`check_sample_to_chunk`] lets through. The bytes of
@@ -159,7 +159,8 @@ pub(in crate::structure_data) fn sample_description_indices<'a>(
 /// # Errors
 ///
 /// * [`DataOffsetOverflow`](Error::DataOffsetOverflow): the first sample
-///   whose bytes end past the last data offset a `u64` counts.
+///   whose end, the data offset just past its last byte, is past what a
+///   `u64` counts.
 pub(in crate::structure_data) fn check_data_offsets(
     stsc: &SampleToChunkBox,
     chunk_offset: &ChunkOffsetVariant,
@@ -634,7 +635,7 @@ mod tests {
     }
 
     #[test]
-    fn a_sample_that_ends_past_what_a_u64_counts_is_the_last() {
+    fn a_sample_whose_end_is_past_what_a_u64_counts_is_the_last() {
         let (stsc, co64, stsz) = (
             stsc(&[(1, 2, 1)]),
             co64(&[u64::MAX - 5, 0]),
@@ -647,6 +648,27 @@ mod tests {
         );
         assert_eq!(chunk_samples.next(), None);
         assert_eq!(chunk_samples.next(), None);
+    }
+
+    #[test]
+    fn a_sample_whose_end_is_u64_max_is_followed_by_the_next_and_one_past_it_is_the_last() {
+        let (stsc, co64) = (stsc(&[(1, 2, 1)]), co64(&[u64::MAX - 15, 0]));
+        assert_eq!(
+            chunk_samples(&stsc, &co64, &stsz(&[5, 10, 1, 1]), 4).collect::<Vec<_>>(),
+            [
+                chunk_sample(1, u64::MAX - 15, 5),
+                chunk_sample(1, u64::MAX - 10, 10),
+                chunk_sample(1, 0, 1),
+                chunk_sample(1, 1, 1)
+            ]
+        );
+        assert_eq!(
+            chunk_samples(&stsc, &co64, &stsz(&[5, 11, 1, 1]), 4).collect::<Vec<_>>(),
+            [
+                chunk_sample(1, u64::MAX - 15, 5),
+                chunk_sample(1, u64::MAX - 10, 11)
+            ]
+        );
     }
 
     #[test]
@@ -758,7 +780,28 @@ mod tests {
     }
 
     #[test]
-    fn the_first_sample_of_a_constant_size_to_end_past_the_last_data_offset_is_refused() {
+    fn the_first_sample_of_a_stored_size_whose_end_is_past_what_a_u64_counts_is_refused() {
+        let check = |sizes: &[u32]| {
+            check_data_offsets(
+                &stsc(&[(1, 2, 1)]),
+                &co64(&[u64::MAX - 15]),
+                &stsz(sizes),
+                2,
+            )
+        };
+        assert_eq!(check(&[5, 10]), Ok(()));
+        assert_eq!(
+            check(&[5, 11]),
+            Err(Error::DataOffsetOverflow {
+                sample_number: 2,
+                offset: u64::MAX - 10,
+                size: 11
+            })
+        );
+    }
+
+    #[test]
+    fn the_first_sample_of_a_constant_size_whose_end_is_past_what_a_u64_counts_is_refused() {
         let check = |second_chunk_offset| {
             check_data_offsets(
                 &stsc(&[(1, 4, 1)]),
