@@ -7,6 +7,9 @@ use super::error::Error;
 use crate::SampleLocation;
 
 /// What a [`Demuxer`](super::Demuxer) found in its input
+///
+/// A value the demuxer reads from a box, the `ftyp` or the `moov`, is handed
+/// over owned: the demuxer keeps no copy.
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub enum Event {
