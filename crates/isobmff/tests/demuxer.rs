@@ -248,17 +248,23 @@ mod tests {
         }
         assert_eq!(events, expected.get(..2).unwrap());
 
-        // The bytes after the `moov`, handed over while its locations wait
         let waiting = demuxer.required_input();
         hand_over(&mut demuxer, MOVIE_FIRST, waiting.unwrap().position);
-        assert_eq!(demuxer.required_input(), waiting);
+        assert_eq!(
+            demuxer.required_input(),
+            waiting,
+            "the bytes after the moov, handed over while its locations wait"
+        );
         drain(&mut demuxer, &mut events);
         assert_eq!(events, expected.get(..2 + 12 + 58).unwrap());
 
-        // The same bytes, handed over once every location is polled
         assert_eq!(demuxer.required_input(), waiting);
         hand_over(&mut demuxer, MOVIE_FIRST, waiting.unwrap().position);
-        assert_ne!(demuxer.required_input(), waiting);
+        assert_ne!(
+            demuxer.required_input(),
+            waiting,
+            "the same bytes, handed over once every location is polled"
+        );
         drain(&mut demuxer, &mut events);
         assert_eq!(events, expected.get(..2 + 12 + 58 + 1).unwrap());
     }
