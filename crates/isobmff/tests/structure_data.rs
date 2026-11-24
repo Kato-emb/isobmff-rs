@@ -25,7 +25,7 @@ mod tests {
     use isobmff_test_support::serde_json::Value;
     use isobmff_test_support::{
         FfprobePacket, conformance_files, ffprobe, ffprobe_packets, fixture_movie_box, gpac_list,
-        movie_box,
+        gpac_tracks, movie_box,
     };
 
     /// The location of the sample of track `track_id` decoded at `decoding_time` for `sample_duration`, at data offset `offset` of the file for `size` bytes, of the first sample entry
@@ -377,21 +377,15 @@ mod tests {
 
     /// The number of samples GPAC reports the sample size table of each track of `report` declares, by `track_ID`
     fn gpac_sample_counts(report: &Value) -> BTreeMap<u32, usize> {
-        report
-            .pointer("/IsoMediaFile/MovieBox/TrackBox")
-            .map(gpac_list)
-            .unwrap_or_default()
+        gpac_tracks(report)
             .into_iter()
-            .map(|trak| {
-                let track_id = trak
-                    .pointer("/TrackHeaderBox/@TrackID")
-                    .and_then(Value::as_str);
+            .map(|(track_id, trak)| {
                 let stbl = trak.pointer("/MediaBox/MediaInformationBox/SampleTableBox");
                 let sample_count = ["SampleSizeBox", "CompactSampleSizeBox"]
                     .into_iter()
                     .find_map(|size_box| stbl?.get(size_box)?.get("@SampleCount")?.as_str());
                 (
-                    track_id.unwrap().parse().unwrap(),
+                    track_id,
                     sample_count.map_or(0, |count| count.parse().unwrap()),
                 )
             })
@@ -400,15 +394,9 @@ mod tests {
 
     /// The container each data reference entry GPAC reports of each track of `report` specifies, in the order of the entries, by `track_ID`; `None` for an entry of a type other than `url ` and `urn `
     fn gpac_containers(report: &Value) -> BTreeMap<u32, Vec<Option<MediaDataContainer>>> {
-        report
-            .pointer("/IsoMediaFile/MovieBox/TrackBox")
-            .map(gpac_list)
-            .unwrap_or_default()
+        gpac_tracks(report)
             .into_iter()
-            .map(|trak| {
-                let track_id = trak
-                    .pointer("/TrackHeaderBox/@TrackID")
-                    .and_then(Value::as_str);
+            .map(|(track_id, trak)| {
                 let containers = trak
                     .pointer(
                         "/MediaBox/MediaInformationBox/DataInformationBox/DataReferenceBox/URLDataEntryBox",
@@ -430,7 +418,7 @@ mod tests {
                         }
                     })
                     .collect();
-                (track_id.unwrap().parse().unwrap(), containers)
+                (track_id, containers)
             })
             .collect()
     }

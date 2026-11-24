@@ -116,8 +116,9 @@ pub enum DataOrigin {
     /// Table 6
     Container,
     /// The first byte of the `MovieFragmentBox` that defines the sample:
-    /// movie-fragment-relative, §6.1 Table 1 and §8.8.7.1 Table 6; a track
-    /// fragment whose data offsets count from the end of the data of the
-    /// track fragment before it is read as counting from where that one does
+    /// movie-fragment-relative, §6.1 Table 1 and §8.8.7.1 Table 6. The end of
+    /// the data of the preceding track fragment, which Table 1 also names,
+    /// is no data origin of a location: a location counts from what the data
+    /// offsets of that track fragment count from
     MovieFragment,
 }

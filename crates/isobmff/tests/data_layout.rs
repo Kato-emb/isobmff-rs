@@ -14,7 +14,9 @@ mod tests {
         Utf8String,
     };
     use isobmff_test_support::fixtures::{movie, track};
-    use isobmff_test_support::{conformance_files, fixture_movie_box, gpac_children, gpac_list};
+    use isobmff_test_support::{
+        conformance_files, fixture_movie_box, gpac_children, gpac_list, gpac_tracks,
+    };
 
     /// `stsd` of sample entries of the `data_reference_index`es `data_reference_indexes`
     fn stsd(data_reference_indexes: &[u16]) -> SampleDescriptionBox {
@@ -145,21 +147,13 @@ mod tests {
             let Some(moov) = file.movie_box() else {
                 continue;
             };
-            let gpac_tracks = file
-                .report
-                .pointer("/IsoMediaFile/MovieBox/TrackBox")
-                .map(gpac_list)
-                .unwrap_or_default();
+            let gpac_tracks = gpac_tracks(&file.report);
             for trak in &moov.trak {
                 let track_id = trak.tkhd.track_id;
                 let Some(minf) = gpac_tracks
                     .iter()
-                    .find(|gpac| {
-                        gpac.pointer("/TrackHeaderBox/@TrackID")
-                            .and_then(|id| id.as_str())
-                            == Some(&track_id.to_string())
-                    })
-                    .and_then(|gpac| gpac.pointer("/MediaBox/MediaInformationBox"))
+                    .find(|&&(gpac_track_id, _)| gpac_track_id == track_id)
+                    .and_then(|(_, gpac)| gpac.pointer("/MediaBox/MediaInformationBox"))
                 else {
                     differences.push(format!("{}: GPAC reports no track {track_id}", file.name));
                     continue;
