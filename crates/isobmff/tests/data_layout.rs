@@ -10,8 +10,8 @@ mod tests {
     use isobmff::structure_data::data_layout::{DataOrigins, data_entry};
     use isobmff::structure_data::{Error, MovieReader};
     use isobmff::{
-        AnyBox, BoxDefinition, BoxType, DataOrigin, FourCc, SampleLocation, SampleProperties,
-        Utf8String,
+        AnyBox, BoxDefinition, BoxType, DataOrigin, FourCc, MediaDataContainer, SampleLocation,
+        SampleProperties, Utf8String,
     };
     use isobmff_test_support::{conformance_files, fixture_movie_box, gpac_children, gpac_list};
 
@@ -244,15 +244,20 @@ mod tests {
             .collect()
     }
 
-    /// The number of the samples of each track, and whether the data reference entry of each places them in the same file, in the order of the tracks
-    fn tracks_of(locations: &[(SampleLocation, &DataEntry)]) -> Vec<(u32, usize, bool)> {
-        let mut tracks = Vec::<(u32, usize, bool)>::new();
-        for (location, entry) in locations {
+    /// The number of the samples of each track in each container, in the order of the tracks
+    fn tracks_of(
+        locations: &[(SampleLocation, &DataEntry)],
+    ) -> Vec<(u32, usize, MediaDataContainer)> {
+        let mut tracks = Vec::<(u32, usize, MediaDataContainer)>::new();
+        for (location, _) in locations {
             match tracks.last_mut() {
-                Some((track_id, samples, _)) if *track_id == location.properties.track_id => {
+                Some((track_id, samples, container))
+                    if (*track_id, *container)
+                        == (location.properties.track_id, location.container) =>
+                {
                     *samples = samples.saturating_add(1);
                 }
-                _ => tracks.push((location.properties.track_id, 1, entry.is_in_same_file())),
+                _ => tracks.push((location.properties.track_id, 1, location.container)),
             }
         }
         tracks
@@ -261,8 +266,20 @@ mod tests {
     #[test]
     fn a_sample_that_counts_from_the_start_of_its_file_lies_at_its_data_offset_there() {
         for (name, tracks) in [
-            ("movie_moov_first.mp4", [(1, 12, true), (2, 58, true)]),
-            ("external_movie.mp4", [(1, 12, false), (2, 58, true)]),
+            (
+                "movie_moov_first.mp4",
+                [
+                    (1, 12, MediaDataContainer::SameFile),
+                    (2, 58, MediaDataContainer::SameFile),
+                ],
+            ),
+            (
+                "external_movie.mp4",
+                [
+                    (1, 12, MediaDataContainer::Resource),
+                    (2, 58, MediaDataContainer::SameFile),
+                ],
+            ),
         ] {
             let movie = fixture_movie_box(name);
             let locations = locations_of(&movie);
@@ -287,7 +304,8 @@ mod tests {
     fn a_sample_that_counts_from_an_identified_media_data_is_refused_while_none_is_taken() {
         let movie = fixture_movie_box("imda_movie_moov_first.mp4");
         let locations = locations_of(&movie);
-        assert_eq!(tracks_of(&locations), [(1, 12, false), (2, 58, false)]);
+        let imda = MediaDataContainer::IdentifiedMediaData { imda_identifier: 1 };
+        assert_eq!(tracks_of(&locations), [(1, 12, imda), (2, 58, imda)]);
         let mut data_origins = DataOrigins::new();
         for (location, entry) in locations {
             assert_eq!(
@@ -308,6 +326,7 @@ mod tests {
                 sample_flags: SampleFlags::default(),
                 sample_description_index: 1,
             },
+            container: MediaDataContainer::SameFile,
             data_origin,
             offset: 16,
             size: 100,

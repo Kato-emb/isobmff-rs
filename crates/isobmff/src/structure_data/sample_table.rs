@@ -17,7 +17,7 @@ use isobmff_core::BoxDefinition;
 use super::Error;
 use super::data_layout::{self, ChunkSamples};
 use super::timeline::{self, SampleTimings};
-use crate::{SampleLocation, SampleProperties};
+use crate::{DataOrigin, MediaDataContainer, SampleLocation, SampleProperties};
 
 /// Returns the location of each sample the `sample table` `stbl` of track `track_id` declares, in decoding order, once its tables agree with each other as the specification reads them
 ///
@@ -39,7 +39,7 @@ use crate::{SampleLocation, SampleProperties};
 ///   sample size table, ISO/IEC 14496-12 §8.7.3.2.
 /// * The failures of [`check_sync_samples`](timeline::check_sync_samples).
 /// * The failures of
-///   [`sample_table_data_origin`](data_layout::sample_table_data_origin),
+///   [`sample_table_container`](data_layout::sample_table_container),
 ///   for the first entry of the sample-to-chunk table whose run holds a
 ///   sample and whose sample entry it fails for: an entry that holds no
 ///   sample is not looked at.
@@ -89,7 +89,7 @@ pub(super) fn samples<'a>(
     for sample_description_index in
         data_layout::sample_description_indices(stsc, chunk_offset, sample_count)
     {
-        data_layout::sample_table_data_origin(&stbl.stsd, dref, sample_description_index)?;
+        data_layout::sample_table_container(&stbl.stsd, dref, sample_description_index)?;
     }
     data_layout::check_data_offsets(stsc, chunk_offset, sample_size, sample_count)?;
     Ok(Samples {
@@ -126,12 +126,16 @@ impl Iterator for Samples<'_> {
         let timing = self.timings.next()?;
         // Why end rather than report the failure: `samples` refused a table
         // where this fails, and an iterator cannot return `Err`.
-        let data_origin = data_layout::sample_table_data_origin(
+        let container = data_layout::sample_table_container(
             self.stsd,
             self.dref,
             chunk_sample.sample_description_index,
         )
         .ok()?;
+        let data_origin = match container {
+            MediaDataContainer::IdentifiedMediaData { .. } => DataOrigin::IdentifiedMediaData,
+            MediaDataContainer::SameFile | MediaDataContainer::Resource => DataOrigin::File,
+        };
         Some(SampleLocation {
             properties: SampleProperties {
                 track_id: self.track_id,
@@ -141,6 +145,7 @@ impl Iterator for Samples<'_> {
                 sample_flags: timing.sample_flags,
                 sample_description_index: chunk_sample.sample_description_index,
             },
+            container,
             data_origin,
             offset: chunk_sample.offset,
             size: chunk_sample.size,

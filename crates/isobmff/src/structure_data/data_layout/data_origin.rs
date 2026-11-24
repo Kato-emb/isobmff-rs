@@ -6,9 +6,9 @@
 
 use isobmff_boxes::DataEntry;
 
-use super::data_reference::imda_identifier;
+use super::data_reference::media_data_container;
 use crate::structure_data::Error;
-use crate::{DataOrigin, SampleLocation};
+use crate::{DataOrigin, MediaDataContainer, SampleLocation};
 
 /// The file offsets of the `data origin`s of a file, which turn the location of a sample into one at its file offset
 ///
@@ -27,7 +27,7 @@ use crate::{DataOrigin, SampleLocation};
 /// ```
 /// use isobmff::boxes::{DataEntry, DataEntryUrlBox, SampleFlags};
 /// use isobmff::structure_data::data_layout::DataOrigins;
-/// use isobmff::{DataOrigin, SampleLocation, SampleProperties};
+/// use isobmff::{DataOrigin, MediaDataContainer, SampleLocation, SampleProperties};
 ///
 /// // A sample 16 bytes into the movie fragment, in the file of the `moof`
 /// let location = SampleLocation {
@@ -39,6 +39,7 @@ use crate::{DataOrigin, SampleLocation};
 ///         sample_flags: SampleFlags::default(),
 ///         sample_description_index: 1,
 ///     },
+///     container: MediaDataContainer::SameFile,
 ///     data_origin: DataOrigin::MovieFragment,
 ///     offset: 16,
 ///     size: 100,
@@ -136,14 +137,19 @@ impl DataOrigins {
         data_entry: &DataEntry,
     ) -> Result<SampleLocation, Error> {
         let sample_description_index = location.properties.sample_description_index;
-        let imda_identifier = imda_identifier(
+        let container = media_data_container(
             data_entry,
             sample_description_index,
             self.movie_fragment
                 .map(|movie_fragment| movie_fragment.sequence_number),
         )?;
-        match (location.data_origin, imda_identifier) {
-            (DataOrigin::File, None) => Ok(location),
+        match (location.data_origin, container) {
+            (DataOrigin::File, MediaDataContainer::SameFile | MediaDataContainer::Resource) => {
+                Ok(SampleLocation {
+                    container,
+                    ..location
+                })
+            }
             (DataOrigin::MovieFragment, _) => {
                 let movie_fragment = self
                     .movie_fragment
@@ -162,20 +168,34 @@ impl DataOrigins {
                         size: location.size,
                     })?;
                 Ok(SampleLocation {
+                    container: match container {
+                        MediaDataContainer::IdentifiedMediaData { .. } => {
+                            MediaDataContainer::SameFile
+                        }
+                        MediaDataContainer::SameFile | MediaDataContainer::Resource => container,
+                    },
                     data_origin: DataOrigin::File,
                     offset,
                     ..location
                 })
             }
-            (DataOrigin::IdentifiedMediaData, Some(imda_identifier)) => {
-                Err(Error::IdentifiedMediaDataNotRead { imda_identifier })
-            }
-            (DataOrigin::File, Some(_)) | (DataOrigin::IdentifiedMediaData, None) => {
+            (
+                DataOrigin::IdentifiedMediaData,
+                MediaDataContainer::IdentifiedMediaData { imda_identifier },
+            ) => Err(Error::IdentifiedMediaDataNotRead { imda_identifier }),
+            (DataOrigin::File, MediaDataContainer::IdentifiedMediaData { imda_identifier }) => {
                 Err(Error::DataOriginMismatch {
                     sample_description_index,
-                    imda_identifier,
+                    imda_identifier: Some(imda_identifier),
                 })
             }
+            (
+                DataOrigin::IdentifiedMediaData,
+                MediaDataContainer::SameFile | MediaDataContainer::Resource,
+            ) => Err(Error::DataOriginMismatch {
+                sample_description_index,
+                imda_identifier: None,
+            }),
         }
     }
 }

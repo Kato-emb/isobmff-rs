@@ -19,4 +19,4 @@ pub(super) use chunk::{
 };
 pub use data_origin::DataOrigins;
 pub use data_reference::data_entry;
-pub(super) use data_reference::sample_table_data_origin;
+pub(super) use data_reference::sample_table_container;

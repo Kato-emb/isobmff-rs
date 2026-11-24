@@ -1,16 +1,18 @@
-//! Which data reference entry specifies the container of the samples of a sample entry, and the `data origin` of the samples of a sample table
+//! Which data reference entry specifies the container of the samples of a sample entry, and which container that is
 //!
 //! The data reference table (`dref`), ISO/IEC 14496-12 §8.7.2, lists the
 //! containers of the media data of a track; the `data_reference_index` of a
-//! sample entry names one of them. The type of that entry sets the data
-//! origin of the samples of a sample table, §8.7.5.3.
+//! sample entry names one of them. The type of that entry, and its flags,
+//! tell which: the same file, a resource a URL or a URN identifies, or an
+//! `IdentifiedMediaDataBox`, §6.1. The data offsets of the samples of a
+//! sample table count from the start of that container, §8.7.5.3.
 
 use isobmff_boxes::{
     DataEntry, DataEntryImdaBox, DataEntrySeqNumImdaBox, DataReferenceBox, SampleDescriptionBox,
 };
 use isobmff_core::BoxDefinition;
 
-use crate::DataOrigin;
+use crate::MediaDataContainer;
 use crate::structure_data::Error;
 
 /// Returns the data reference entry the sample entry `sample_description_index`, from 1, of `stsd` names in `dref`
@@ -77,36 +79,39 @@ pub fn data_entry<'a>(
         })
 }
 
-/// Returns the `imda_identifier` of the `IdentifiedMediaDataBox` the data reference entry `data_entry` of the sample entry `sample_description_index` places the media data in, or `None` where it places it in none
+/// Returns the container the data reference entry `data_entry` of the sample entry `sample_description_index` specifies for the samples it describes
 ///
-/// A `DataEntryImdaBox` names the `IdentifiedMediaDataBox` by its
-/// `imda_ref_identifier`, and a `DataEntrySeqNumImdaBox` by the
-/// `sequence_number` of the movie fragment that contains the sample,
-/// ISO/IEC 14496-12 §8.7.2.1; `sequence_number` is that of the movie fragment
-/// of the sample, or `None` for a sample in no movie fragment. Any other
-/// entry places the media data in the file it identifies.
+/// A `DataEntryUrlBox` without a location places them in the same file, and
+/// any other `DataEntryUrlBox` or `DataEntryUrnBox` in the resource its URL
+/// or URN identifies, ISO/IEC 14496-12 §6.1 and §8.7.2. A `DataEntryImdaBox`
+/// names the `IdentifiedMediaDataBox` by its `imda_ref_identifier`, and a
+/// `DataEntrySeqNumImdaBox` by the `sequence_number` of the movie fragment
+/// that contains the samples, §8.7.2.1; `sequence_number` is that of the
+/// movie fragment of the samples, or `None` for samples in no movie
+/// fragment. An entry of a type this crate does not read names a resource
+/// other than the same file.
 ///
 /// # Errors
 ///
 /// * [`SequenceNumberOutsideMovieFragment`](Error::SequenceNumberOutsideMovieFragment):
-///   `data_entry` is a `DataEntrySeqNumImdaBox`, and the sample is in no movie
-///   fragment, §8.7.2.1.
+///   `data_entry` is a `DataEntrySeqNumImdaBox`, and the samples are in no
+///   movie fragment, §8.7.2.1.
 /// * [`DataEntryNotDecoded`](Error::DataEntryNotDecoded): `data_entry` is a
 ///   `DataEntryImdaBox` or a `DataEntrySeqNumImdaBox` that does not decode.
-pub(super) fn imda_identifier(
+pub(super) fn media_data_container(
     data_entry: &DataEntry,
     sample_description_index: u32,
     sequence_number: Option<u32>,
-) -> Result<Option<u32>, Error> {
+) -> Result<MediaDataContainer, Error> {
     match data_entry {
-        DataEntry::Imda(imdt) => Ok(Some(imdt.imda_ref_identifier)),
-        DataEntry::SeqNumImda(_) => {
-            sequence_number
-                .map(Some)
-                .ok_or(Error::SequenceNumberOutsideMovieFragment {
-                    sample_description_index,
-                })
-        }
+        DataEntry::Imda(imdt) => Ok(MediaDataContainer::IdentifiedMediaData {
+            imda_identifier: imdt.imda_ref_identifier,
+        }),
+        DataEntry::SeqNumImda(_) => sequence_number
+            .map(|imda_identifier| MediaDataContainer::IdentifiedMediaData { imda_identifier })
+            .ok_or(Error::SequenceNumberOutsideMovieFragment {
+                sample_description_index,
+            }),
         DataEntry::Other(other)
             if other.box_type() == DataEntryImdaBox::BOX_TYPE
                 || other.box_type() == DataEntrySeqNumImdaBox::BOX_TYPE =>
@@ -116,16 +121,19 @@ pub(super) fn imda_identifier(
                 box_type: other.box_type(),
             })
         }
-        DataEntry::Url(_) | DataEntry::Urn(_) | DataEntry::Other(_) | _ => Ok(None),
+        same_file if same_file.is_in_same_file() => Ok(MediaDataContainer::SameFile),
+        DataEntry::Url(_) | DataEntry::Urn(_) | DataEntry::Other(_) | _ => {
+            Ok(MediaDataContainer::Resource)
+        }
     }
 }
 
-/// Returns what the data offsets of the samples of a sample table whose sample entry is `sample_description_index` count from
+/// Returns the container the samples of a sample table whose sample entry is `sample_description_index` lie in
 ///
-/// They count from the payload of an `IdentifiedMediaDataBox` where the data
-/// reference entry is a `DataEntryImdaBox`, and from the start of the file
-/// it identifies otherwise, ISO/IEC 14496-12 §8.7.5.3: "Otherwise, the value
-/// of `chunk_offset` is relative to the start of the containing media file".
+/// Their data offsets count from the start of it: from the first byte of the
+/// payload of an `IdentifiedMediaDataBox`, and from the start of the file
+/// otherwise, ISO/IEC 14496-12 §8.7.5.3: "Otherwise, the value of
+/// `chunk_offset` is relative to the start of the containing media file".
 ///
 /// # Errors
 ///
@@ -136,17 +144,15 @@ pub(super) fn imda_identifier(
 /// * [`DataEntryNotDecoded`](Error::DataEntryNotDecoded): the data reference
 ///   entry is a `DataEntryImdaBox` or a `DataEntrySeqNumImdaBox` that does
 ///   not decode.
-pub(in crate::structure_data) fn sample_table_data_origin(
+pub(in crate::structure_data) fn sample_table_container(
     stsd: &SampleDescriptionBox,
     dref: &DataReferenceBox,
     sample_description_index: u32,
-) -> Result<DataOrigin, Error> {
-    let data_entry = data_entry(stsd, dref, sample_description_index)?;
-    Ok(
-        match imda_identifier(data_entry, sample_description_index, None)? {
-            Some(_) => DataOrigin::IdentifiedMediaData,
-            None => DataOrigin::File,
-        },
+) -> Result<MediaDataContainer, Error> {
+    media_data_container(
+        data_entry(stsd, dref, sample_description_index)?,
+        sample_description_index,
+        None,
     )
 }
 
@@ -161,9 +167,9 @@ mod tests {
     };
     use isobmff_core::{AnyBox, BoxDecode, BoxType, FourCc, Utf8String};
 
-    use crate::DataOrigin;
+    use crate::MediaDataContainer;
 
-    use super::{Error, imda_identifier, sample_table_data_origin};
+    use super::{Error, media_data_container, sample_table_container};
 
     /// `stsd` of one sample entry, and `dref` of `data_entry` alone
     fn track_of(data_entry: DataEntry) -> (SampleDescriptionBox, DataReferenceBox) {
@@ -180,10 +186,10 @@ mod tests {
     }
 
     #[test]
-    fn the_samples_of_a_sample_table_count_from_an_imda_or_from_the_start_of_the_file_otherwise() {
-        let origin = |data_entry| {
+    fn the_samples_of_a_sample_table_lie_in_the_container_their_entry_specifies() {
+        let container = |data_entry| {
             let (stsd, dref) = track_of(data_entry);
-            sample_table_data_origin(&stsd, &dref, 1)
+            sample_table_container(&stsd, &dref, 1)
         };
         let mut url = DataEntryUrlBox::default();
         url.location = Some(Utf8String::new(String::from("a.mp4")).unwrap());
@@ -194,19 +200,19 @@ mod tests {
         let other = AnyBox::from_raw_bytes(BoxType::compact(*b"xxxx"), Vec::new());
         assert_eq!(
             [
-                origin(DataEntry::Url(DataEntryUrlBox::default())),
-                origin(DataEntry::Url(url)),
-                origin(DataEntry::Urn(urn)),
-                origin(DataEntry::Other(other)),
-                origin(DataEntry::Imda(imdt)),
-                origin(DataEntry::SeqNumImda(DataEntrySeqNumImdaBox::default())),
+                container(DataEntry::Url(DataEntryUrlBox::default())),
+                container(DataEntry::Url(url)),
+                container(DataEntry::Urn(urn)),
+                container(DataEntry::Other(other)),
+                container(DataEntry::Imda(imdt)),
+                container(DataEntry::SeqNumImda(DataEntrySeqNumImdaBox::default())),
             ],
             [
-                Ok(DataOrigin::File),
-                Ok(DataOrigin::File),
-                Ok(DataOrigin::File),
-                Ok(DataOrigin::File),
-                Ok(DataOrigin::IdentifiedMediaData),
+                Ok(MediaDataContainer::SameFile),
+                Ok(MediaDataContainer::Resource),
+                Ok(MediaDataContainer::Resource),
+                Ok(MediaDataContainer::Resource),
+                Ok(MediaDataContainer::IdentifiedMediaData { imda_identifier: 7 }),
                 Err(Error::SequenceNumberOutsideMovieFragment {
                     sample_description_index: 1
                 }),
@@ -214,7 +220,7 @@ mod tests {
         );
         let (stsd, dref) = track_of(DataEntry::Url(DataEntryUrlBox::default()));
         assert_eq!(
-            sample_table_data_origin(&stsd, &dref, 2),
+            sample_table_container(&stsd, &dref, 2),
             Err(Error::SampleDescriptionIndexOutOfRange {
                 sample_description_index: 2,
                 sample_entry_count: 1
@@ -233,17 +239,17 @@ mod tests {
         );
         assert_eq!(
             [
-                imda_identifier(&imdt, 1, None),
-                imda_identifier(&imdt, 1, Some(3)),
-                imda_identifier(&snim, 1, Some(3)),
-                imda_identifier(&url, 1, Some(3)),
-                imda_identifier(&snim, 2, None),
+                media_data_container(&imdt, 1, None),
+                media_data_container(&imdt, 1, Some(3)),
+                media_data_container(&snim, 1, Some(3)),
+                media_data_container(&url, 1, Some(3)),
+                media_data_container(&snim, 2, None),
             ],
             [
-                Ok(Some(7)),
-                Ok(Some(7)),
-                Ok(Some(3)),
-                Ok(None),
+                Ok(MediaDataContainer::IdentifiedMediaData { imda_identifier: 7 }),
+                Ok(MediaDataContainer::IdentifiedMediaData { imda_identifier: 7 }),
+                Ok(MediaDataContainer::IdentifiedMediaData { imda_identifier: 3 }),
+                Ok(MediaDataContainer::SameFile),
                 Err(Error::SequenceNumberOutsideMovieFragment {
                     sample_description_index: 2
                 }),
@@ -277,7 +283,7 @@ mod tests {
             );
             let (stsd, _) = track_of(DataEntry::Url(DataEntryUrlBox::default()));
             assert_eq!(
-                sample_table_data_origin(&stsd, &dref, 1),
+                sample_table_container(&stsd, &dref, 1),
                 Err(Error::DataEntryNotDecoded {
                     sample_description_index: 1,
                     box_type
