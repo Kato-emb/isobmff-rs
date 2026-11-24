@@ -150,7 +150,28 @@ impl Demuxer {
                 State::Movie,
                 Some(Event::Error(Error::DuplicateMovie { offset })),
             ),
-            (state, Observation::Reported(event)) => (state, Some(event)),
+            (state, Observation::FileType(file_type)) => (state, Some(Event::FileType(file_type))),
+            (state, Observation::Box { offset, header }) => {
+                (state, Some(Event::Box { offset, header }))
+            }
+            (
+                state,
+                Observation::Decode {
+                    offset,
+                    box_type,
+                    source,
+                },
+            ) => (
+                state,
+                Some(Event::Error(Error::Decode {
+                    offset,
+                    box_type,
+                    source,
+                })),
+            ),
+            (state, Observation::FileLevel(error)) => {
+                (state, Some(Event::Error(Error::FileLevel(error))))
+            }
             (state, Observation::NeedMoreData) => (state, None),
         };
         self.state = state;

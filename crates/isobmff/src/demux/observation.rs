@@ -3,10 +3,8 @@
 use alloc::boxed::Box;
 
 use isobmff_boxes::{FileTypeBox, MovieBox};
-use isobmff_core::{BoxDecode, BoxDefinition, BoxType};
+use isobmff_core::{BoxDecode, BoxDefinition, BoxHeader, BoxType};
 
-use super::error::Error;
-use super::event::Event;
 use crate::SampleLocation;
 use crate::file_level;
 
@@ -16,10 +14,19 @@ pub(super) enum Observation {
     Unreported(SampleLocation),
     /// The `moov` at file offset `offset`, read into its value
     Movie { offset: u64, movie: Box<MovieBox> },
-    /// What the box reader reported, read into the event the demuxer reports
-    /// as it is whatever it has read: the `ftyp`, a box not read into a value,
-    /// or an error
-    Reported(Event),
+    /// The `ftyp`, read into its value
+    FileType(FileTypeBox),
+    /// A box at file level not read into a value
+    Box { offset: u64, header: BoxHeader },
+    /// The payload of the box at file offset `offset` of a type read into a
+    /// value, which does not read
+    Decode {
+        offset: u64,
+        box_type: BoxType,
+        source: isobmff_core::Error,
+    },
+    /// A box at file level the box reader cannot read
+    FileLevel(file_level::Error),
     /// Nothing without more input
     NeedMoreData,
 }
@@ -30,9 +37,7 @@ type DecodePayload = fn(u64, &[u8]) -> Result<Observation, isobmff_core::Error>;
 /// The types of the boxes the demuxer reads into values, each with how it reads the payload of one
 pub(super) const PAYLOAD_BOX_TYPES: [(BoxType, DecodePayload); 2] = [
     (FileTypeBox::BOX_TYPE, |_, payload| {
-        Ok(Observation::Reported(Event::FileType(
-            FileTypeBox::decode_payload(payload)?,
-        )))
+        Ok(Observation::FileType(FileTypeBox::decode_payload(payload)?))
     }),
     (MovieBox::BOX_TYPE, |offset, payload| {
         Ok(Observation::Movie {
@@ -47,7 +52,7 @@ pub(super) fn observe(event: file_level::Event<'_>) -> Observation {
     match event {
         file_level::Event::Box { offset, header }
         | file_level::Event::FrontPart { offset, header, .. } => {
-            Observation::Reported(Event::Box { offset, header })
+            Observation::Box { offset, header }
         }
         file_level::Event::BoxPayload {
             offset,
@@ -65,15 +70,11 @@ pub(super) fn observe(event: file_level::Event<'_>) -> Observation {
                 Err(isobmff_core::Error::unsupported_box(box_type)),
                 |&(_, decode)| decode(offset, payload),
             )
-            .unwrap_or_else(|source| {
-                Observation::Reported(Event::Error(Error::Decode {
-                    offset,
-                    box_type,
-                    source,
-                }))
+            .unwrap_or_else(|source| Observation::Decode {
+                offset,
+                box_type,
+                source,
             }),
-        file_level::Event::Error(error) => {
-            Observation::Reported(Event::Error(Error::FileLevel(error)))
-        }
+        file_level::Event::Error(error) => Observation::FileLevel(error),
     }
 }
