@@ -9,7 +9,7 @@ mod tests {
 
     use isobmff::boxes::{DataEntry, DataEntryImdaBox, FileTypeBox, MovieBox, SampleToChunkEntry};
     use isobmff::demux::{Error, Event};
-    use isobmff::structure_data::data_layout::{DataOrigins, data_entry};
+    use isobmff::structure_data::data_layout::DataOrigins;
     use isobmff::structure_data::{self, MovieReader};
     use isobmff::{
         BoxDecode, BoxDefinition, BoxHeader, Boxes, Demuxer, DemuxerConfig, SampleLocation,
@@ -18,7 +18,7 @@ mod tests {
     use isobmff_test_support::fixtures::{encoded, movie, track, written};
     use isobmff_test_support::{conformance_files, movie_box};
 
-    use crate::common::compare_with_gpac_and_ffprobe;
+    use crate::common::{chunk_data_entries, compare_with_gpac_and_ffprobe};
 
     /// A movie file whose samples all lie after the `moov`
     const MOVIE_FIRST: &[u8] = include_bytes!("fixtures/movie_moov_first.mp4");
@@ -355,13 +355,7 @@ mod tests {
         moov.trak
             .iter()
             .any(|trak| {
-                let stbl = &trak.mdia.minf.stbl;
-                let entries = stbl.stsc.iter().flat_map(|stsc| &stsc.entries);
-                entries.into_iter().any(|entry| {
-                    let dref = &trak.mdia.minf.dinf.dref;
-                    let data_entry = data_entry(&stbl.stsd, dref, entry.sample_description_index);
-                    matches!(data_entry, Ok(DataEntry::Imda(_)))
-                })
+                chunk_data_entries(trak).any(|data_entry| matches!(data_entry, DataEntry::Imda(_)))
             })
             .then_some("of a chunk in an imda")
     }

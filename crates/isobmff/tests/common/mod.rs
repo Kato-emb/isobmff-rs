@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
 
-use isobmff::boxes::{MovieBox, SampleSizeVariant, SampleSizes};
+use isobmff::boxes::{DataEntry, MovieBox, SampleSizeVariant, SampleSizes, TrackBox};
 use isobmff::structure_data::data_layout::data_entry;
 use isobmff::{MediaDataContainer, SampleLocation};
 use isobmff_test_support::serde_json::Value;
@@ -98,6 +98,15 @@ impl Tally {
     }
 }
 
+/// The data reference entry the sample entry of each entry of the sample-to-chunk table of `trak` names, for the entries whose sample entry names one
+pub(crate) fn chunk_data_entries(trak: &TrackBox) -> impl Iterator<Item = &DataEntry> {
+    let (stbl, dref) = (&trak.mdia.minf.stbl, &trak.mdia.minf.dinf.dref);
+    let entries = stbl.stsc.iter().flat_map(|stsc| &stsc.entries);
+    entries
+        .into_iter()
+        .filter_map(|entry| data_entry(&stbl.stsd, dref, entry.sample_description_index).ok())
+}
+
 /// Compares the locations `read` reports of the samples of each track of the `moov` of each conformance file and fixture with the samples GPAC and ffprobe read, and prints what it compared and left out
 ///
 /// `leave_out` takes the `moov` of a file, and returns why the reader does not locate its samples, for a file left out. `read` takes the bytes of a file and its `moov`, and returns the locations by `track_ID`, each track in decoding order, or why it does not.
@@ -155,7 +164,7 @@ pub(crate) fn compare_with_gpac_and_ffprobe(
         for trak in &moov.trak {
             let track_id = trak.tkhd.track_id;
             let ours = ours.get(&track_id).map(Vec::as_slice).unwrap_or_default();
-            let (stbl, dref) = (&trak.mdia.minf.stbl, &trak.mdia.minf.dinf.dref);
+            let stbl = &trak.mdia.minf.stbl;
             let declared = match &stbl.sample_size {
                 Some(SampleSizeVariant::SampleSize(stsz)) => match &stsz.sample_sizes {
                     SampleSizes::Constant { sample_count, .. } => {
@@ -218,11 +227,8 @@ pub(crate) fn compare_with_gpac_and_ffprobe(
                 left_out.push((name.clone(), Some(track_id), "of no sample"));
                 continue;
             }
-            let entries = stbl.stsc.iter().flat_map(|stsc| &stsc.entries);
-            let is_elsewhere = entries.into_iter().any(|entry| {
-                data_entry(&stbl.stsd, dref, entry.sample_description_index)
-                    .is_ok_and(|data_entry| !data_entry.is_in_same_file())
-            });
+            let is_elsewhere =
+                chunk_data_entries(trak).any(|data_entry| !data_entry.is_in_same_file());
             let Some(packets) = &packets else {
                 left_out.push((
                     name.clone(),
