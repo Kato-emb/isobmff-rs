@@ -3,7 +3,8 @@
 //! [`file_level`] reads the boxes at `file level` from bytes that arrive in
 //! pieces. [`structure_data`] reads what the tables of a sample table declare
 //! of its samples: their timing, and where their bytes lie, as a data offset
-//! from a [`DataOrigin`] in the container a data reference entry specifies;
+//! from a [`DataOrigin`] in the [`MediaDataContainer`] a data reference
+//! entry specifies;
 //! its [`MovieReader`](structure_data::MovieReader) reads them for every
 //! track of a `moov`, and its
 //! [`DataOrigins`](structure_data::data_layout::DataOrigins) puts each at its
@@ -25,7 +26,7 @@ pub mod structure_data;
 /// The boxes of ISO/IEC 14496-12, each read into a value and written back, from `isobmff-boxes`
 pub use isobmff_boxes as boxes;
 pub use isobmff_core::*;
-pub use sample::{DataOrigin, SampleLocation, SampleProperties};
+pub use sample::{DataOrigin, MediaDataContainer, SampleLocation, SampleProperties};
 
 /// Where a reader wants input next
 ///

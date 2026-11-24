@@ -188,6 +188,34 @@ pub fn gpac_children(node: &Value) -> Vec<&Value> {
         .collect()
 }
 
+/// Returns the tracks GPAC reports in `report`, each with its `track_ID`, in the order GPAC reports them
+///
+/// # Panics
+///
+/// * GPAC reports a track without a `track_ID` that reads as a `u32`.
+#[must_use]
+#[expect(
+    clippy::unwrap_used,
+    reason = "a test of a report whose tracks GPAC gives no track_ID fails"
+)]
+pub fn gpac_tracks(report: &Value) -> Vec<(u32, &Value)> {
+    report
+        .pointer("/IsoMediaFile/MovieBox/TrackBox")
+        .map(gpac_list)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|trak| {
+            let track_id = trak
+                .pointer("/TrackHeaderBox/@TrackID")
+                .and_then(Value::as_str)
+                .unwrap()
+                .parse()
+                .unwrap();
+            (track_id, trak)
+        })
+        .collect()
+}
+
 /// Returns what GPAC reports under one name, which it reports as an array where there are several and as the value alone where there is one
 #[must_use]
 pub fn gpac_list(value: &Value) -> Vec<&Value> {

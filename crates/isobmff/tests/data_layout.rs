@@ -10,10 +10,13 @@ mod tests {
     use isobmff::structure_data::data_layout::{DataOrigins, data_entry};
     use isobmff::structure_data::{Error, MovieReader};
     use isobmff::{
-        AnyBox, BoxDefinition, BoxType, DataOrigin, FourCc, SampleLocation, SampleProperties,
+        AnyBox, BoxType, DataOrigin, FourCc, MediaDataContainer, SampleLocation, SampleProperties,
         Utf8String,
     };
-    use isobmff_test_support::{conformance_files, fixture_movie_box, gpac_children, gpac_list};
+    use isobmff_test_support::fixtures::{movie, track};
+    use isobmff_test_support::{
+        conformance_files, fixture_movie_box, gpac_children, gpac_list, gpac_tracks,
+    };
 
     /// `stsd` of sample entries of the `data_reference_index`es `data_reference_indexes`
     fn stsd(data_reference_indexes: &[u16]) -> SampleDescriptionBox {
@@ -144,21 +147,13 @@ mod tests {
             let Some(moov) = file.movie_box() else {
                 continue;
             };
-            let gpac_tracks = file
-                .report
-                .pointer("/IsoMediaFile/MovieBox/TrackBox")
-                .map(gpac_list)
-                .unwrap_or_default();
+            let gpac_tracks = gpac_tracks(&file.report);
             for trak in &moov.trak {
                 let track_id = trak.tkhd.track_id;
                 let Some(minf) = gpac_tracks
                     .iter()
-                    .find(|gpac| {
-                        gpac.pointer("/TrackHeaderBox/@TrackID")
-                            .and_then(|id| id.as_str())
-                            == Some(&track_id.to_string())
-                    })
-                    .and_then(|gpac| gpac.pointer("/MediaBox/MediaInformationBox"))
+                    .find(|&&(gpac_track_id, _)| gpac_track_id == track_id)
+                    .and_then(|(_, gpac)| gpac.pointer("/MediaBox/MediaInformationBox"))
                 else {
                     differences.push(format!("{}: GPAC reports no track {track_id}", file.name));
                     continue;
@@ -225,34 +220,23 @@ mod tests {
         assert!(tracks > 0 && sample_entries > 0, "no track was compared");
     }
 
-    /// The location of each sample of `movie`, with the data reference entry of its sample entry
-    fn locations_of(movie: &MovieBox) -> Vec<(SampleLocation, &DataEntry)> {
-        MovieReader::new()
-            .handle_movie(movie)
-            .unwrap()
-            .map(|location| {
-                let trak = movie
-                    .trak
-                    .iter()
-                    .find(|trak| trak.tkhd.track_id == location.properties.track_id)
-                    .unwrap();
-                let (stsd, dref) = (&trak.mdia.minf.stbl.stsd, &trak.mdia.minf.dinf.dref);
-                let entry =
-                    data_entry(stsd, dref, location.properties.sample_description_index).unwrap();
-                (location, entry)
-            })
-            .collect()
+    /// The location of each sample of `movie`
+    fn locations_of(movie: &MovieBox) -> Vec<SampleLocation> {
+        MovieReader::new().handle_movie(movie).unwrap().collect()
     }
 
-    /// The number of the samples of each track, and whether the data reference entry of each places them in the same file, in the order of the tracks
-    fn tracks_of(locations: &[(SampleLocation, &DataEntry)]) -> Vec<(u32, usize, bool)> {
-        let mut tracks = Vec::<(u32, usize, bool)>::new();
-        for (location, entry) in locations {
+    /// The number of the samples of each track in each container, in the order of the tracks
+    fn tracks_of(locations: &[SampleLocation]) -> Vec<(u32, usize, MediaDataContainer)> {
+        let mut tracks = Vec::<(u32, usize, MediaDataContainer)>::new();
+        for location in locations {
             match tracks.last_mut() {
-                Some((track_id, samples, _)) if *track_id == location.properties.track_id => {
+                Some((track_id, samples, container))
+                    if (*track_id, *container)
+                        == (location.properties.track_id, location.container) =>
+                {
                     *samples = samples.saturating_add(1);
                 }
-                _ => tracks.push((location.properties.track_id, 1, entry.is_in_same_file())),
+                _ => tracks.push((location.properties.track_id, 1, location.container)),
             }
         }
         tracks
@@ -261,22 +245,46 @@ mod tests {
     #[test]
     fn a_sample_that_counts_from_the_start_of_its_file_lies_at_its_data_offset_there() {
         for (name, tracks) in [
-            ("movie_moov_first.mp4", [(1, 12, true), (2, 58, true)]),
-            ("external_movie.mp4", [(1, 12, false), (2, 58, true)]),
+            (
+                "movie_moov_first.mp4",
+                [
+                    (1, 12, MediaDataContainer::SameFile),
+                    (2, 58, MediaDataContainer::SameFile),
+                ],
+            ),
+            (
+                "external_movie.mp4",
+                [
+                    (
+                        1,
+                        12,
+                        MediaDataContainer::Resource {
+                            data_reference_index: 1,
+                        },
+                    ),
+                    (2, 58, MediaDataContainer::SameFile),
+                ],
+            ),
         ] {
             let movie = fixture_movie_box(name);
             let locations = locations_of(&movie);
             assert_eq!(tracks_of(&locations), tracks, "{name}");
+            assert!(
+                locations
+                    .iter()
+                    .all(|location| location.data_origin == DataOrigin::Container),
+                "{name}"
+            );
             let mut data_origins = DataOrigins::new();
             let placed = locations
                 .iter()
-                .map(|&(location, entry)| data_origins.handle_location(location, entry))
+                .map(|&location| data_origins.handle_location(location))
                 .collect::<Vec<_>>();
             assert_eq!(
                 placed,
                 locations
                     .iter()
-                    .map(|&(location, _)| Ok(location))
+                    .map(|&location| Ok(location))
                     .collect::<Vec<_>>(),
                 "{name}"
             );
@@ -284,21 +292,53 @@ mod tests {
     }
 
     #[test]
-    fn a_sample_that_counts_from_an_identified_media_data_is_refused_while_none_is_taken() {
+    fn the_samples_of_a_track_lie_in_the_resource_their_sample_entry_names() {
+        let mut trak = track(
+            1,
+            10,
+            &[4, 4, 4],
+            &[(1, 1), (2, 1), (3, 1)],
+            &[100, 200, 300],
+        );
+        let stbl = &mut trak.mdia.minf.stbl;
+        stbl.stsd = stsd(&[1, 2, 2]);
+        for (entry, sample_description_index) in
+            stbl.stsc.as_mut().unwrap().entries.iter_mut().zip(1..)
+        {
+            entry.sample_description_index = sample_description_index;
+        }
+        let url = |location: &str| {
+            let mut url = DataEntryUrlBox::default();
+            url.location = Some(Utf8String::new(String::from(location)).unwrap());
+            DataEntry::Url(url)
+        };
+        trak.mdia.minf.dinf.dref = dref(vec![url("a.mp4"), url("b.mp4")]);
+        let resource = |data_reference_index| MediaDataContainer::Resource {
+            data_reference_index,
+        };
+        assert_eq!(
+            tracks_of(&locations_of(&movie([trak]))),
+            [(1, 1, resource(1)), (1, 2, resource(2))]
+        );
+    }
+
+    #[test]
+    fn a_sample_in_an_identified_media_data_is_refused_while_none_is_taken() {
         let movie = fixture_movie_box("imda_movie_moov_first.mp4");
         let locations = locations_of(&movie);
-        assert_eq!(tracks_of(&locations), [(1, 12, false), (2, 58, false)]);
+        let imda = MediaDataContainer::IdentifiedMediaData { imda_identifier: 1 };
+        assert_eq!(tracks_of(&locations), [(1, 12, imda), (2, 58, imda)]);
         let mut data_origins = DataOrigins::new();
-        for (location, entry) in locations {
+        for location in locations {
             assert_eq!(
-                data_origins.handle_location(location, entry),
+                data_origins.handle_location(location),
                 Err(Error::IdentifiedMediaDataNotRead { imda_identifier: 1 })
             );
         }
     }
 
-    /// The location of a sample of the first sample entry, 16 bytes from `data_origin`, of 100 bytes
-    fn location(data_origin: DataOrigin) -> SampleLocation {
+    /// The location of a sample of the first sample entry in `container`, 16 bytes from `data_origin`, of 100 bytes
+    fn location(container: MediaDataContainer, data_origin: DataOrigin) -> SampleLocation {
         SampleLocation {
             properties: SampleProperties {
                 track_id: 1,
@@ -308,105 +348,71 @@ mod tests {
                 sample_flags: SampleFlags::default(),
                 sample_description_index: 1,
             },
+            container,
             data_origin,
             offset: 16,
             size: 100,
         }
     }
 
-    /// The location of a sample 16 bytes from a movie fragment, as at the file offset `offset`
-    fn at_file_offset(offset: u64) -> SampleLocation {
+    /// The location of a sample 16 bytes from a movie fragment, as at the offset `offset` of `container`
+    fn at_offset(container: MediaDataContainer, offset: u64) -> SampleLocation {
         SampleLocation {
-            data_origin: DataOrigin::File,
             offset,
-            ..location(DataOrigin::MovieFragment)
+            ..location(container, DataOrigin::Container)
         }
     }
 
     #[test]
-    fn each_data_origin_is_taken_with_the_data_reference_entry_of_its_sample() {
-        let mut imdt = DataEntryImdaBox::default();
-        imdt.imda_ref_identifier = 7;
-        let entries = [
-            DataEntry::Url(DataEntryUrlBox::default()),
-            DataEntry::Imda(imdt),
-            DataEntry::SeqNumImda(DataEntrySeqNumImdaBox::default()),
-            DataEntry::Other(AnyBox::from_raw_bytes(
-                DataEntryImdaBox::BOX_TYPE,
-                vec![1, 0, 0, 0],
-            )),
-        ];
-        let origins = [
-            DataOrigin::File,
-            DataOrigin::MovieFragment,
-            DataOrigin::IdentifiedMediaData,
-        ];
-        let at_1016 = Ok(at_file_offset(1016));
-        let mismatch = |imda_identifier| {
-            Err(Error::DataOriginMismatch {
-                sample_description_index: 1,
-                imda_identifier,
-            })
+    fn each_sample_counts_from_its_data_origin_in_its_container() {
+        let same_file = MediaDataContainer::SameFile;
+        let resource = MediaDataContainer::Resource {
+            data_reference_index: 2,
         };
-        let not_read = |imda_identifier| Err(Error::IdentifiedMediaDataNotRead { imda_identifier });
-        let outside = Err(Error::SequenceNumberOutsideMovieFragment {
-            sample_description_index: 1,
-        });
-        let not_decoded = Err(Error::DataEntryNotDecoded {
-            sample_description_index: 1,
-            box_type: DataEntryImdaBox::BOX_TYPE,
-        });
+        let imda = MediaDataContainer::IdentifiedMediaData { imda_identifier: 7 };
+        let containers = [same_file, resource, imda];
+        let not_read = Err(Error::IdentifiedMediaDataNotRead { imda_identifier: 7 });
         let missing = Err(Error::MovieFragmentPositionMissing);
         let before_any_moof = [
-            [
-                Ok(location(DataOrigin::File)),
-                missing.clone(),
-                mismatch(None),
-            ],
-            [mismatch(Some(7)), missing.clone(), not_read(7)],
-            [outside.clone(), outside.clone(), outside],
-            [
-                not_decoded.clone(),
-                not_decoded.clone(),
-                not_decoded.clone(),
-            ],
+            [Ok(at_offset(same_file, 16)), missing.clone()],
+            [Ok(at_offset(resource, 16)), missing.clone()],
+            [not_read.clone(), missing],
         ];
         let after_a_moof = [
-            [
-                Ok(location(DataOrigin::File)),
-                at_1016.clone(),
-                mismatch(None),
-            ],
-            [mismatch(Some(7)), at_1016.clone(), not_read(7)],
-            [mismatch(Some(3)), at_1016, not_read(3)],
-            [not_decoded.clone(), not_decoded.clone(), not_decoded],
+            [Ok(at_offset(same_file, 16)), Ok(at_offset(same_file, 1016))],
+            [Ok(at_offset(resource, 16)), Ok(at_offset(resource, 1016))],
+            [not_read, Ok(at_offset(same_file, 1016))],
         ];
-        for (moof, expected) in [(None, before_any_moof), (Some((1000, 3)), after_a_moof)] {
+        for (moof_offset, expected) in [(None, before_any_moof), (Some(1000), after_a_moof)] {
             let mut data_origins = DataOrigins::new();
-            if let Some((moof_offset, sequence_number)) = moof {
-                data_origins.handle_movie_fragment(moof_offset, sequence_number);
+            if let Some(moof_offset) = moof_offset {
+                data_origins.handle_movie_fragment(moof_offset);
             }
-            let taken = entries
-                .iter()
-                .map(|entry| {
-                    origins.map(|data_origin| {
-                        data_origins.handle_location(location(data_origin), entry)
-                    })
+            let taken = containers.map(|container| {
+                [DataOrigin::Container, DataOrigin::MovieFragment].map(|data_origin| {
+                    data_origins.handle_location(location(container, data_origin))
                 })
-                .collect::<Vec<_>>();
-            assert_eq!(taken, expected, "after the moof {moof:?}");
+            });
+            assert_eq!(taken, expected, "after the moof at {moof_offset:?}");
+            for placed in taken.iter().flatten().flatten() {
+                assert_eq!(
+                    data_origins.handle_location(*placed),
+                    Ok(*placed),
+                    "taken again after the moof at {moof_offset:?}"
+                );
+            }
         }
     }
 
     #[test]
     fn a_sample_is_refused_where_its_end_is_past_what_a_u64_counts_and_the_origins_stay() {
-        let same_file = DataEntry::Url(DataEntryUrlBox::default());
+        let same_file = MediaDataContainer::SameFile;
         let mut data_origins = DataOrigins::new();
-        data_origins.handle_movie_fragment(u64::MAX - 116, 1);
-        let mut past = location(DataOrigin::MovieFragment);
+        data_origins.handle_movie_fragment(u64::MAX - 116);
+        let mut past = location(same_file, DataOrigin::MovieFragment);
         past.size = 101;
         assert_eq!(
-            data_origins.handle_location(past, &same_file),
+            data_origins.handle_location(past),
             Err(Error::FileOffsetOverflow {
                 data_origin_offset: u64::MAX - 116,
                 offset: 16,
@@ -415,7 +421,7 @@ mod tests {
         );
         past.offset = u64::MAX;
         assert_eq!(
-            data_origins.handle_location(past, &same_file),
+            data_origins.handle_location(past),
             Err(Error::FileOffsetOverflow {
                 data_origin_offset: u64::MAX - 116,
                 offset: u64::MAX,
@@ -423,24 +429,24 @@ mod tests {
             })
         );
         assert_eq!(
-            data_origins.handle_location(location(DataOrigin::MovieFragment), &same_file),
-            Ok(at_file_offset(u64::MAX - 100))
+            data_origins.handle_location(location(same_file, DataOrigin::MovieFragment)),
+            Ok(at_offset(same_file, u64::MAX - 100))
         );
     }
 
     #[test]
     fn the_samples_count_from_the_moof_taken_last() {
-        let same_file = DataEntry::Url(DataEntryUrlBox::default());
+        let same_file = MediaDataContainer::SameFile;
         let mut data_origins = DataOrigins::new();
-        data_origins.handle_movie_fragment(1000, 1);
+        data_origins.handle_movie_fragment(1000);
         assert_eq!(
-            data_origins.handle_location(location(DataOrigin::MovieFragment), &same_file),
-            Ok(at_file_offset(1016))
+            data_origins.handle_location(location(same_file, DataOrigin::MovieFragment)),
+            Ok(at_offset(same_file, 1016))
         );
-        data_origins.handle_movie_fragment(2000, 2);
+        data_origins.handle_movie_fragment(2000);
         assert_eq!(
-            data_origins.handle_location(location(DataOrigin::MovieFragment), &same_file),
-            Ok(at_file_offset(2016))
+            data_origins.handle_location(location(same_file, DataOrigin::MovieFragment)),
+            Ok(at_offset(same_file, 2016))
         );
     }
 }

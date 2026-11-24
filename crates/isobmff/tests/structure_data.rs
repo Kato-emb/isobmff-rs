@@ -17,12 +17,15 @@ mod tests {
     };
     use isobmff::structure_data::data_layout::data_entry;
     use isobmff::structure_data::{Error, MovieReader};
-    use isobmff::{BoxDefinition, BoxType, DataOrigin, FourCc, SampleLocation, SampleProperties};
+    use isobmff::{
+        BoxDefinition, BoxType, DataOrigin, FourCc, MediaDataContainer, SampleLocation,
+        SampleProperties,
+    };
     use isobmff_test_support::fixtures::{movie, track};
     use isobmff_test_support::serde_json::Value;
     use isobmff_test_support::{
         FfprobePacket, conformance_files, ffprobe, ffprobe_packets, fixture_movie_box, gpac_list,
-        movie_box,
+        gpac_tracks, movie_box,
     };
 
     /// The location of the sample of track `track_id` decoded at `decoding_time` for `sample_duration`, at data offset `offset` of the file for `size` bytes, of the first sample entry
@@ -40,7 +43,8 @@ mod tests {
                 sample_flags: SampleFlags::default(),
                 sample_description_index: 1,
             },
-            data_origin: DataOrigin::File,
+            container: MediaDataContainer::SameFile,
+            data_origin: DataOrigin::Container,
             offset,
             size,
         }
@@ -373,23 +377,48 @@ mod tests {
 
     /// The number of samples GPAC reports the sample size table of each track of `report` declares, by `track_ID`
     fn gpac_sample_counts(report: &Value) -> BTreeMap<u32, usize> {
-        report
-            .pointer("/IsoMediaFile/MovieBox/TrackBox")
-            .map(gpac_list)
-            .unwrap_or_default()
+        gpac_tracks(report)
             .into_iter()
-            .map(|trak| {
-                let track_id = trak
-                    .pointer("/TrackHeaderBox/@TrackID")
-                    .and_then(Value::as_str);
+            .map(|(track_id, trak)| {
                 let stbl = trak.pointer("/MediaBox/MediaInformationBox/SampleTableBox");
                 let sample_count = ["SampleSizeBox", "CompactSampleSizeBox"]
                     .into_iter()
                     .find_map(|size_box| stbl?.get(size_box)?.get("@SampleCount")?.as_str());
                 (
-                    track_id.unwrap().parse().unwrap(),
+                    track_id,
                     sample_count.map_or(0, |count| count.parse().unwrap()),
                 )
+            })
+            .collect()
+    }
+
+    /// The container each data reference entry GPAC reports of each track of `report` specifies, in the order of the entries, by `track_ID`; `None` for an entry of a type other than `url ` and `urn `
+    fn gpac_containers(report: &Value) -> BTreeMap<u32, Vec<Option<MediaDataContainer>>> {
+        gpac_tracks(report)
+            .into_iter()
+            .map(|(track_id, trak)| {
+                let containers = trak
+                    .pointer(
+                        "/MediaBox/MediaInformationBox/DataInformationBox/DataReferenceBox/URLDataEntryBox",
+                    )
+                    .map(gpac_list)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .zip(1..)
+                    .map(|(entry, data_reference_index)| {
+                        match (
+                            entry.get("@Type").and_then(Value::as_str),
+                            entry.get("@Flags").and_then(Value::as_str),
+                        ) {
+                            (Some("url "), Some("1")) => Some(MediaDataContainer::SameFile),
+                            (Some("url " | "urn "), _) => Some(MediaDataContainer::Resource {
+                                data_reference_index,
+                            }),
+                            _ => None,
+                        }
+                    })
+                    .collect();
+                (track_id, containers)
             })
             .collect()
     }
@@ -417,6 +446,7 @@ mod tests {
     fn the_samples_of_each_track_lie_and_are_timed_where_gpac_and_ffprobe_read_them() {
         let mut differences = Vec::<String>::new();
         let (mut timed, mut located) = (Tally::default(), Tally::default());
+        let mut contained = Tally::default();
         let mut times_only = Vec::<(String, u32, usize, usize)>::new();
         let mut left_out = Vec::<(String, Option<u32>, &str)>::new();
         let conformance = conformance_files()
@@ -462,6 +492,7 @@ mod tests {
                 ));
             }
             let gpac = report.as_ref().map(gpac_sample_counts);
+            let gpac_containers = report.as_ref().map(gpac_containers);
             let packets = ffprobe(&["-v", "error"], &path).status.success().then(|| {
                 let mut packets = BTreeMap::<u32, Vec<FfprobePacket>>::new();
                 for packet in ffprobe_packets(&["-ignore_editlist", "1"], &path) {
@@ -490,23 +521,38 @@ mod tests {
                         ours.len()
                     ));
                 }
-                if let Some(location) = ours.iter().find(|location| {
-                    let origin = match data_entry(
-                        &stbl.stsd,
-                        dref,
-                        location.properties.sample_description_index,
-                    ) {
-                        Ok(DataEntry::Imda(_) | DataEntry::SeqNumImda(_)) => {
-                            Some(DataOrigin::IdentifiedMediaData)
-                        }
-                        Ok(_) => Some(DataOrigin::File),
-                        Err(_) => None,
-                    };
-                    origin != Some(location.data_origin)
-                }) {
-                    differences.push(format!(
-                        "{name} track {track_id}: {location:?} counts from another data origin than its data reference entry gives"
-                    ));
+                if let Some(containers) = gpac_containers
+                    .as_ref()
+                    .and_then(|containers| containers.get(&track_id))
+                    && !ours.is_empty()
+                {
+                    let by_sample_entry = stbl
+                        .stsd
+                        .sample_descriptions
+                        .iter()
+                        .map(|sample_entry| {
+                            let index = usize::from(sample_entry.data_reference_index()?);
+                            *containers.get(index.checked_sub(1)?)?
+                        })
+                        .collect::<Vec<_>>();
+                    let theirs = ours
+                        .iter()
+                        .map(|location| {
+                            let index =
+                                usize::try_from(location.properties.sample_description_index);
+                            *by_sample_entry.get(index.ok()?.checked_sub(1)?)?
+                        })
+                        .collect::<Vec<_>>();
+                    let ours = ours
+                        .iter()
+                        .map(|location| Some(location.container))
+                        .collect::<Vec<_>>();
+                    if ours != theirs {
+                        differences.push(format!(
+                            "{name} track {track_id}: containers {ours:?}, GPAC's data reference entries {theirs:?}"
+                        ));
+                    }
+                    contained.add(report.is_some(), ours.len());
                 }
                 if let Some(gpac) = &gpac
                     && gpac.get(&track_id) != Some(&ours.len())
@@ -605,11 +651,11 @@ mod tests {
             );
         }
         println!(
-            "compared the times of {timed:?}, the positions of {located:?}; left out {tally:?}"
+            "compared the times of {timed:?}, the positions of {located:?}, the containers of {contained:?}; left out {tally:?}"
         );
         assert_eq!(differences, Vec::<String>::new());
         assert!(
-            located.tracks > 0 && located.samples > 0,
+            located.tracks > 0 && located.samples > 0 && contained.samples > 0,
             "no track was compared"
         );
     }

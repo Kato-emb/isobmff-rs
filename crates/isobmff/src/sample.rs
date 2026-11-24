@@ -34,20 +34,22 @@ pub struct SampleProperties {
 ///
 /// The `location of samples`, ISO/IEC 14496-12 §6.1
 ///
-/// The data reference entry the sample entry of the sample names specifies
-/// the container of its data, and `offset` and `size` give its byte range
-/// there, counted from the `data_origin`.
+/// The bytes of the sample lie in its `container`, and `offset` and `size`
+/// give their byte range there, counted from the `data_origin`.
 #[expect(
     clippy::exhaustive_structs,
-    reason = "a caller of a writer builds one, and a sample lies at an offset from an origin for a size whatever else it declares"
+    reason = "a caller of a writer builds one, and a sample lies in a container at an offset from an origin for a size whatever else it declares"
 )]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SampleLocation {
     /// What the structure-data declares of the sample
     pub properties: SampleProperties,
-    /// What `offset` counts from, which the data reference entry sets for a
-    /// sample table, §6.1 Table 1, and the track fragment header with it for
-    /// a track fragment, §8.8.7.1 Table 6
+    /// Where the bytes of the sample lie, as the data reference entry of its
+    /// sample entry specifies, §6.1 and §8.7.2
+    pub container: MediaDataContainer,
+    /// What `offset` counts from: the start of the `container` for a sample
+    /// table, §8.7.5.3, and as the track fragment header sets it for a track
+    /// fragment, §8.8.7.1 Table 6
     pub data_origin: DataOrigin,
     /// Data offset of the first byte of the sample, from the `data_origin`:
     /// the start of its chunk (§8.7.5) or of the data of its track fragment
@@ -56,6 +58,44 @@ pub struct SampleLocation {
     /// Number of the bytes of the sample, as the sample size table (§8.7.3)
     /// or the track fragment (§8.8.7, §8.8.8) gives it
     pub size: u32,
+}
+
+/// Where the bytes of a sample lie, the `container` the data reference entry of its sample entry specifies
+///
+/// The container for the sample data, ISO/IEC 14496-12 §6.1 and §8.7.2
+///
+/// A reader takes it from the data reference entry; a location that
+/// [`DataOrigins`](crate::structure_data::data_layout::DataOrigins) puts at
+/// its file offset names the container its bytes lie in there.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MediaDataContainer {
+    /// The same file where the data reference entry is present: as read, a
+    /// `DataEntryUrlBox` whose flags say so, §8.7.2.3; as put at its file
+    /// offset, also a sample that lay in an `IdentifiedMediaDataBox` of the
+    /// file, whatever its data offset counted from
+    SameFile,
+    /// A resource other than the same file: one a `DataEntryUrlBox` or a
+    /// `DataEntryUrnBox` identifies by its URL or URN, or one a data
+    /// reference entry of a type this crate does not read names
+    ///
+    /// The data reference entry is the `data_reference_index`-th, from 1, of
+    /// the `dref` of the track of the sample, §8.5.2.3: two samples whose
+    /// container is equal lie in the same resource where they are of the same
+    /// track, whereas an `imda_identifier` names one `IdentifiedMediaDataBox`
+    /// in the whole file.
+    Resource {
+        /// `data_reference_index` of the sample entry of the sample, §8.5.2.2
+        data_reference_index: u16,
+    },
+    /// The `IdentifiedMediaDataBox` whose `imda_identifier` is
+    /// `imda_identifier`: the `imda_ref_identifier` of a `DataEntryImdaBox`,
+    /// or, for a `DataEntrySeqNumImdaBox`, the `sequence_number` of the movie
+    /// fragment that contains the sample, §8.7.2.1
+    IdentifiedMediaData {
+        /// `imda_identifier` of the `IdentifiedMediaDataBox`, §8.1.4.2
+        imda_identifier: u32,
+    },
 }
 
 /// What a data offset counts from, the `data origin`
@@ -69,16 +109,16 @@ pub struct SampleLocation {
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DataOrigin {
-    /// The first byte of the file the data reference entry identifies:
-    /// file-relative, §6.1 Table 1 and §8.7.5.3
-    File,
+    /// The start of the container of the sample: the first byte of the file
+    /// the data reference entry identifies, file-relative, or of the payload
+    /// of the `IdentifiedMediaDataBox` it names,
+    /// IdentifiedMediaDataBox-relative: §6.1 Table 1, §8.7.5.3 and §8.8.7.1
+    /// Table 6
+    Container,
     /// The first byte of the `MovieFragmentBox` that defines the sample:
-    /// movie-fragment-relative, §6.1 Table 1 and §8.8.7.1 Table 6
+    /// movie-fragment-relative, §6.1 Table 1 and §8.8.7.1 Table 6. The end of
+    /// the data of the preceding track fragment, which Table 1 also names,
+    /// is no data origin of a location: a location counts from what the data
+    /// offsets of that track fragment count from
     MovieFragment,
-    /// The first byte of the payload of the `IdentifiedMediaDataBox` the data
-    /// reference entry names, by the `imda_ref_identifier` of a
-    /// `DataEntryImdaBox` or, for a `DataEntrySeqNumImdaBox`, the
-    /// `sequence_number` of the movie fragment: §6.1 Table 1, §8.7.2.1 and
-    /// §8.7.5.3
-    IdentifiedMediaData,
 }
