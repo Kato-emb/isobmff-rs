@@ -657,6 +657,15 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "after the offset")]
+    fn input_that_starts_after_the_required_offset_while_an_event_waits_is_a_bug_of_the_caller() {
+        let mut reader = BoxReader::new(BoxReaderConfig::new(PAYLOAD_LIMIT));
+        reader.handle_input(0, b"\0\0\0\x08free");
+        let required = reader.required_input().unwrap();
+        reader.handle_input(required.position.checked_add(1).unwrap(), b"\0\0\0\x08free");
+    }
+
+    #[test]
     #[should_panic(expected = "after finish")]
     fn input_after_finish_is_a_bug_of_the_caller() {
         let mut reader = BoxReader::new(BoxReaderConfig::new(PAYLOAD_LIMIT));

@@ -245,9 +245,6 @@ impl BoxReader {
     /// if called after [`finish`](Self::finish): either is a bug of the caller.
     pub fn handle_input(&mut self, position: u64, bytes: &[u8]) {
         assert!(!self.input.is_ended(), "input handed over after finish");
-        if self.pending.is_some() {
-            return;
-        }
         let Some(required) = self.required_input() else {
             return;
         };
@@ -256,6 +253,9 @@ impl BoxReader {
             "input starts at offset {position}, after the offset {} the reader requires",
             required.position
         );
+        if self.pending.is_some() {
+            return;
+        }
         let ignored =
             usize::try_from(required.position.saturating_sub(position)).unwrap_or(usize::MAX);
         let Some(mut bytes) = bytes.get(ignored..) else {
