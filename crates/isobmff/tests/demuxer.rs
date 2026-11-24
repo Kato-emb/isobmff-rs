@@ -357,11 +357,7 @@ mod tests {
                     sample_locations += located.len();
                 }
                 Err(source) => {
-                    let error = Event::Error(Error::StructureData {
-                        offset,
-                        box_type: MovieBox::BOX_TYPE,
-                        source,
-                    });
+                    let error = Event::Error(Error::StructureData { offset, source });
                     if !reported.is_empty() || !events.contains(&error) {
                         differences.push(format!(
                             "{}: {} locations reported, and not {error:?}",
@@ -392,7 +388,6 @@ mod tests {
                 events_of_boxes(MOVIE_FIRST),
                 Error::SampleCountOverLimit {
                     offset: 32,
-                    box_type: MovieBox::BOX_TYPE,
                     location_count: 12 + 58,
                     limit: 12 + 58 - 1,
                 }
@@ -436,14 +431,9 @@ mod tests {
                 config(None, sample_count_limit),
             );
             let expected_error = match located(&refused) {
-                Err(source) => Error::StructureData {
-                    offset: 32,
-                    box_type: MovieBox::BOX_TYPE,
-                    source,
-                },
+                Err(source) => Error::StructureData { offset: 32, source },
                 Ok(_) => Error::SampleCountOverLimit {
                     offset: 32,
-                    box_type: MovieBox::BOX_TYPE,
                     location_count: 12 + 58 + 1,
                     limit: 12 + 58,
                 },
@@ -527,7 +517,6 @@ mod tests {
                 Event::FileType(FileTypeBox::decode_payload(ftyp.2).unwrap()),
                 Event::Error(Error::StructureData {
                     offset: 32,
-                    box_type: MovieBox::BOX_TYPE,
                     source: structure_data::Error::IdentifiedMediaDataNotRead {
                         imda_identifier: 1
                     },

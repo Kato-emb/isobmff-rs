@@ -27,10 +27,8 @@ pub enum Error {
     /// reads them; neither the box nor the location of any of its samples is
     /// reported
     StructureData {
-        /// File offset of the box
+        /// File offset of the `moov`
         offset: u64,
-        /// Type of the box, `moov`
-        box_type: BoxType,
         /// Why its samples cannot be located
         source: structure_data::Error,
     },
@@ -43,16 +41,14 @@ pub enum Error {
         /// File offset of the `moov` that follows
         offset: u64,
     },
-    /// A box declares more samples than
+    /// A `moov` declares more samples than
     /// [`DemuxerConfig::sample_count_limit`](super::DemuxerConfig::sample_count_limit)
     /// lets the demuxer hold the locations of; neither the box nor the
     /// location of any of its samples is reported, and nothing is allocated
     /// for them
     SampleCountOverLimit {
-        /// File offset of the box
+        /// File offset of the `moov`
         offset: u64,
-        /// Type of the box, `moov`
-        box_type: BoxType,
         /// The sample locations the demuxer would hold once it read the box
         location_count: u64,
         /// The limit they are over
@@ -70,11 +66,9 @@ impl fmt::Display for Error {
                 formatter,
                 "the box `{box_type}` at offset {offset} does not read"
             ),
-            Self::StructureData {
-                offset, box_type, ..
-            } => write!(
+            Self::StructureData { offset, .. } => write!(
                 formatter,
-                "the samples of the `{box_type}` at offset {offset} cannot be located as the specification reads them"
+                "the samples of the `moov` at offset {offset} cannot be located as the specification reads them"
             ),
             Self::DuplicateMovie { offset } => write!(
                 formatter,
@@ -82,12 +76,11 @@ impl fmt::Display for Error {
             ),
             Self::SampleCountOverLimit {
                 offset,
-                box_type,
                 location_count,
                 limit,
             } => write!(
                 formatter,
-                "the `{box_type}` at offset {offset} would have the demuxer hold {location_count} sample locations, over the limit of {limit}"
+                "the `moov` at offset {offset} would have the demuxer hold {location_count} sample locations, over the limit of {limit}"
             ),
         }
     }

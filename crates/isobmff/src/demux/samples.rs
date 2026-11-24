@@ -3,7 +3,6 @@
 use alloc::vec::Vec;
 
 use isobmff_boxes::MovieBox;
-use isobmff_core::BoxDefinition;
 
 use super::error::Error;
 use crate::SampleLocation;
@@ -47,17 +46,12 @@ impl Samples {
     /// * [`SampleCountOverLimit`](Error::SampleCountOverLimit): `movie`
     ///   declares more samples than the limit; none is located.
     pub(super) fn handle_movie(&mut self, offset: u64, movie: &MovieBox) -> Result<(), Error> {
-        let refused = |source| Error::StructureData {
-            offset,
-            box_type: MovieBox::BOX_TYPE,
-            source,
-        };
+        let refused = |source| Error::StructureData { offset, source };
         let locations = self.movie_reader.handle_movie(movie).map_err(refused)?;
         let location_count = locations.remaining();
         if location_count > self.sample_count_limit {
             return Err(Error::SampleCountOverLimit {
                 offset,
-                box_type: MovieBox::BOX_TYPE,
                 location_count,
                 limit: self.sample_count_limit,
             });
