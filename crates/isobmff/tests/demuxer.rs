@@ -269,6 +269,41 @@ mod tests {
         assert_eq!(events, expected.get(..2 + 12 + 58 + 1).unwrap());
     }
 
+    /// A demuxer of `movie_moov_first.mp4` that has reported its `moov`, whose locations wait
+    fn demuxer_with_locations_waiting() -> Demuxer {
+        let mut demuxer = Demuxer::new(config(None, None));
+        while !matches!(demuxer.poll_event(), Some(Event::Movie(_))) {
+            let required = demuxer.required_input().unwrap();
+            hand_over(&mut demuxer, MOVIE_FIRST, required.position);
+        }
+        demuxer
+    }
+
+    #[test]
+    #[should_panic(expected = "after the offset")]
+    fn input_after_the_required_offset_while_a_location_waits_is_a_bug() {
+        let mut demuxer = demuxer_with_locations_waiting();
+        let required = demuxer.required_input().unwrap();
+        demuxer.handle_input(required.position.checked_add(1).unwrap(), MOVIE_FIRST);
+    }
+
+    #[test]
+    #[should_panic(expected = "after finish")]
+    fn input_after_finish_while_a_location_waits_is_a_bug() {
+        let mut demuxer = demuxer_with_locations_waiting();
+        demuxer.finish();
+        demuxer.handle_input(0, MOVIE_FIRST);
+    }
+
+    #[test]
+    #[should_panic(expected = "after the offset")]
+    fn input_after_the_required_offset_while_a_box_waits_is_a_bug() {
+        let mut demuxer = Demuxer::new(config(None, None));
+        demuxer.handle_input(0, MOVIE_FIRST);
+        let required = demuxer.required_input().unwrap();
+        demuxer.handle_input(required.position.checked_add(1).unwrap(), MOVIE_FIRST);
+    }
+
     #[test]
     fn the_samples_of_a_movie_are_located_in_the_order_of_their_offsets() {
         for (name, file) in [

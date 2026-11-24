@@ -109,18 +109,19 @@ impl Demuxer {
     /// Bytes before the position [`required_input`](Self::required_input)
     /// names are ignored. The demuxer takes bytes until it has the next event,
     /// and none while an event waits for [`poll_event`](Self::poll_event); it
-    /// copies the box headers and the payloads it reads into values. While the
-    /// location of a sample waits, it returns without looking at `position` or
-    /// `bytes`.
+    /// copies the box headers and the payloads it reads into values.
     ///
     /// # Panics
-    /// Unless the location of a sample waits, panics if `position` is after
-    /// the position `required_input` names, or if called after
-    /// [`finish`](Self::finish): either is a bug of the caller.
+    /// Panics if `position` is after the position `required_input` names, or
+    /// if called after [`finish`](Self::finish): either is a bug of the caller.
     pub fn handle_input(&mut self, position: u64, bytes: &[u8]) {
-        if self.samples.unreported().is_some() {
-            return;
-        }
+        // Why no bytes while a location waits: the box reader still asserts
+        // where the input starts and that it has not ended, and takes nothing.
+        let bytes = if self.samples.unreported().is_some() {
+            &[]
+        } else {
+            bytes
+        };
         self.boxes.handle_input(position, bytes);
     }
 
