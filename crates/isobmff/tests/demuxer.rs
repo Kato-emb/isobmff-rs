@@ -236,34 +236,31 @@ mod tests {
         }
     }
 
-    /// Reads `file` where the demuxer asks, handing the bytes over again after each event polled, while other events wait
-    fn read_handing_over_after_each_event(file: &[u8]) -> Vec<Event> {
+    #[test]
+    fn input_handed_over_while_a_location_waits_is_not_taken() {
+        let expected = events_of_boxes(MOVIE_FIRST);
         let mut demuxer = Demuxer::new(config(None, None));
         let mut events = Vec::new();
-        while let Some(required) = demuxer.required_input() {
-            hand_over(&mut demuxer, file, required.position);
-            while let Some(event) = demuxer.poll_event() {
-                events.push(event);
-                if let Some(required) = demuxer.required_input() {
-                    hand_over(&mut demuxer, file, required.position);
-                }
-            }
+        while !matches!(events.last(), Some(Event::Movie(_))) {
+            let required = demuxer.required_input().unwrap();
+            hand_over(&mut demuxer, MOVIE_FIRST, required.position);
+            events.extend(demuxer.poll_event());
         }
-        events
-    }
+        assert_eq!(events, expected.get(..2).unwrap());
 
-    #[test]
-    fn input_handed_over_while_an_event_waits_is_not_taken() {
-        for (name, file) in [
-            ("movie_moov_first.mp4", MOVIE_FIRST),
-            ("movie_moov_last.mp4", MOVIE_LAST),
-        ] {
-            assert_eq!(
-                read_handing_over_after_each_event(file),
-                events_of_boxes(file),
-                "{name}"
-            );
-        }
+        // The bytes after the `moov`, handed over while its locations wait
+        let waiting = demuxer.required_input();
+        hand_over(&mut demuxer, MOVIE_FIRST, waiting.unwrap().position);
+        assert_eq!(demuxer.required_input(), waiting);
+        drain(&mut demuxer, &mut events);
+        assert_eq!(events, expected.get(..2 + 12 + 58).unwrap());
+
+        // The same bytes, handed over once every location is polled
+        assert_eq!(demuxer.required_input(), waiting);
+        hand_over(&mut demuxer, MOVIE_FIRST, waiting.unwrap().position);
+        assert_ne!(demuxer.required_input(), waiting);
+        drain(&mut demuxer, &mut events);
+        assert_eq!(events, expected.get(..2 + 12 + 58 + 1).unwrap());
     }
 
     #[test]
