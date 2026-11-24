@@ -14,15 +14,20 @@
 //! header of a box, the values its fields carry and the traits a box
 //! implements, such as [`BoxDecode`] and [`BoxEncode`], are at the root of
 //! the crate. The [`Error`] at the root is that of reading and writing a box.
+//!
+//! [`Demuxer`] puts them together: it reads a file from its bytes into its
+//! boxes and the location of each sample of its movie.
 
 #![no_std]
 
 extern crate alloc;
 
+pub mod demux;
 pub mod file_level;
 mod sample;
 pub mod structure_data;
 
+pub use demux::{Demuxer, DemuxerConfig};
 /// The boxes of ISO/IEC 14496-12, each read into a value and written back, from `isobmff-boxes`
 pub use isobmff_boxes as boxes;
 pub use isobmff_core::*;
