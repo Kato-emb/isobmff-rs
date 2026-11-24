@@ -11,17 +11,18 @@ mod tests {
     use isobmff::boxes::{
         ChunkLargeOffsetBox, ChunkOffsetBox, ChunkOffsetVariant, CompositionOffsetBox,
         CompositionOffsetEntry, DataEntry, DataEntrySeqNumImdaBox, MovieBox,
-        SampleDependencyTypeBox, SampleDependencyTypeEntry, SampleFlags, SampleSizeBox,
-        SampleSizeVariant, SampleSizes, SampleToChunkBox, SampleToChunkEntry, SyncSampleBox,
-        TimeToSampleBox, TrackBox,
+        SampleDependencyTypeBox, SampleDependencyTypeEntry, SampleDescription, SampleEntry,
+        SampleFlags, SampleSizeBox, SampleSizeVariant, SampleSizes, SampleToChunkBox,
+        SampleToChunkEntry, SyncSampleBox, TimeToSampleBox, TrackBox,
     };
     use isobmff::structure_data::data_layout::data_entry;
     use isobmff::structure_data::{Error, MovieReader};
-    use isobmff::{BoxDefinition, BoxType, DataOrigin, SampleLocation, SampleProperties};
+    use isobmff::{BoxDefinition, BoxType, DataOrigin, FourCc, SampleLocation, SampleProperties};
     use isobmff_test_support::fixtures::{movie, track};
     use isobmff_test_support::serde_json::Value;
     use isobmff_test_support::{
-        FfprobePacket, conformance_files, ffprobe, ffprobe_packets, gpac_list, movie_box,
+        FfprobePacket, conformance_files, ffprobe, ffprobe_packets, fixture_movie_box, gpac_list,
+        movie_box,
     };
 
     /// The location of the sample of track `track_id` decoded at `decoding_time` for `sample_duration`, at data offset `offset` of the file for `size` bytes, of the first sample entry
@@ -66,9 +67,9 @@ mod tests {
             track(3, 20, &[6, 7], &[(1, 1)], &[300, 50]),
         ]);
         let mut locations = MovieReader::new().handle_movie(&movie).unwrap();
-        assert_eq!(locations.sample_count(), 5);
+        assert_eq!(locations.remaining(), 5);
         let first = locations.next();
-        assert_eq!(locations.sample_count(), 4);
+        assert_eq!(locations.remaining(), 4);
         assert_eq!(
             first.into_iter().chain(locations).collect::<Vec<_>>(),
             [
@@ -238,7 +239,37 @@ mod tests {
     }
 
     #[test]
-    fn a_sample_whose_bytes_end_past_the_last_data_offset_is_refused() {
+    fn a_data_reference_is_reported_before_a_sample_whose_end_is_past_a_u64() {
+        let mut trak = track(1, 1, &[10, 1], &[(1, 1), (2, 1)], &[0, 0]);
+        let mut co64 = ChunkLargeOffsetBox::default();
+        co64.chunk_offsets = vec![u64::MAX - 5, 0];
+        trak.mdia.minf.stbl.chunk_offset = Some(ChunkOffsetVariant::ChunkLargeOffset(co64));
+        let descriptions = &mut trak.mdia.minf.stbl.stsd.sample_descriptions;
+        descriptions.push(SampleDescription::Typed(SampleEntry::new(
+            FourCc::new([0; 4]),
+            2,
+            Vec::new(),
+        )));
+        trak.mdia
+            .minf
+            .dinf
+            .dref
+            .data_entries
+            .push(DataEntry::SeqNumImda(DataEntrySeqNumImdaBox::default()));
+        stsc_entry(&mut trak, 1).sample_description_index = 2;
+        assert_eq!(
+            refused(&movie([trak])),
+            of_track(
+                1,
+                Error::SequenceNumberOutsideMovieFragment {
+                    sample_description_index: 2
+                }
+            )
+        );
+    }
+
+    #[test]
+    fn a_sample_whose_end_is_past_what_a_u64_counts_is_refused() {
         let mut trak = track(1, 1, &[1, 10, 1], &[(1, 2), (2, 1)], &[0, 0]);
         let mut co64 = ChunkLargeOffsetBox::default();
         co64.chunk_offsets = vec![u64::MAX - 5, 0];
@@ -300,7 +331,7 @@ mod tests {
     fn the_tables_are_checked_without_a_step_for_each_sample_they_declare() {
         let movie = movie((1..=4).map(track_of_the_most_samples));
         let locations = MovieReader::new().handle_movie(&movie).unwrap();
-        assert_eq!(locations.sample_count(), 4 * u64::from(u32::MAX));
+        assert_eq!(locations.remaining(), 4 * u64::from(u32::MAX));
     }
 
     /// The fixtures of the `isobmff` crate, `tests/fixtures`, each with its name
@@ -324,7 +355,7 @@ mod tests {
     #[test]
     fn the_fixtures_whose_tables_disagree_are_refused() {
         for (name, box_type, table_sample_count) in REFUSED_FIXTURES {
-            let movie = movie_box(&fs::read(format!("{FIXTURES}/{name}")).unwrap(), name).unwrap();
+            let movie = fixture_movie_box(name);
             assert_eq!(
                 refused(&movie),
                 of_track(
@@ -417,7 +448,7 @@ mod tests {
                     continue;
                 }
             };
-            let declared = locations.sample_count();
+            let declared = locations.remaining();
             let mut ours = BTreeMap::<u32, Vec<SampleLocation>>::new();
             for location in locations {
                 ours.entry(location.properties.track_id)

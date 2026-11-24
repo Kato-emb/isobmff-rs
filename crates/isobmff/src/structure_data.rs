@@ -4,8 +4,9 @@
 //! 14496-12 §3.1.54. [`MovieReader`] reads the [`SampleLocation`] of each
 //! sample the sample tables of a `moov` declare. [`timeline`] reads when the
 //! samples of a sample table are decoded and composed, and how long they
-//! last; [`data_layout`] where their bytes lie, and which data reference
-//! entry specifies their container.
+//! last; [`data_layout`] where their bytes lie, which data reference entry
+//! specifies their container, and, with
+//! [`DataOrigins`](data_layout::DataOrigins), at which file offset.
 
 use alloc::boxed::Box;
 use alloc::vec::{self, Vec};
@@ -96,14 +97,17 @@ impl MovieReader {
     /// # Errors
     ///
     /// * [`Track`](Error::Track): the sample table of the first track whose
-    ///   tables are refused, with why. They are refused where they disagree,
-    ///   as a table that covers another number of samples than the sample
-    ///   size table, ISO/IEC 14496-12 §8.7.3.2, or a sync sample table not in
-    ///   strictly increasing order of sample number, §8.6.2.1; where one the
-    ///   sample table must hold is absent; where the sample entry of a sample
-    ///   names no data reference entry, §8.5.2.3, or one whose samples are
-    ///   each in a movie fragment, §8.7.2.1; and where the bytes of a sample
-    ///   end past the last data offset.
+    ///   tables are refused, with why. They are refused, in this order: where
+    ///   a table the sample table must hold is absent; where they disagree, as
+    ///   a sample-to-chunk table whose `first_chunk`s do not go up from 1,
+    ///   ISO/IEC 14496-12 §8.7.4.3, a table that covers another number of
+    ///   samples than the sample size table, §8.7.3.2, or a sync sample table
+    ///   not in strictly increasing order of sample number, §8.6.2.1; where
+    ///   the sample entry of a sample names no data reference entry, §8.5.2.3,
+    ///   one whose samples are each in a movie fragment, §8.7.2.1, or one of an
+    ///   `IdentifiedMediaDataBox` that does not decode; and where the end of
+    ///   the bytes of a sample, the data offset just past the last of them, is
+    ///   past what a `u64` counts.
     pub fn handle_movie<'a>(&mut self, movie: &'a MovieBox) -> Result<SampleLocations<'a>, Error> {
         let tracks = movie
             .trak
@@ -141,14 +145,15 @@ pub struct SampleLocations<'a> {
 impl SampleLocations<'_> {
     /// Returns the number of samples left to return
     ///
-    /// The number is known before any sample is returned, so a caller can
-    /// hold it against a limit before it keeps the samples.
+    /// Before any sample is returned, it is the number of samples the sample
+    /// tables declare, so a caller can hold it against a limit before it keeps
+    /// the samples.
     #[must_use]
-    pub fn sample_count(&self) -> u64 {
+    pub fn remaining(&self) -> u64 {
         self.tracks
             .as_slice()
             .iter()
-            .map(|samples| u64::from(samples.sample_count()))
+            .map(|samples| u64::from(samples.remaining()))
             .sum()
     }
 }
@@ -166,8 +171,8 @@ impl Iterator for SampleLocations<'_> {
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        let sample_count = usize::try_from(self.sample_count()).ok();
-        (sample_count.unwrap_or(usize::MAX), sample_count)
+        let remaining = usize::try_from(self.remaining()).ok();
+        (remaining.unwrap_or(usize::MAX), remaining)
     }
 }
 

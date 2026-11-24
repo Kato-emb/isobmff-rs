@@ -66,6 +66,25 @@ pub fn movie_box(bytes: &[u8], name: &str) -> Option<MovieBox> {
     )
 }
 
+/// Returns the `moov` of the fixture `name` of the `isobmff` crate, a file of `crates/isobmff/tests/fixtures`
+///
+/// # Panics
+///
+/// * The fixture does not read, holds no `moov`, or its `moov` does not
+///   decode: a test reading it fails, naming the file.
+#[must_use]
+#[expect(
+    clippy::panic,
+    reason = "a test reading a fixture that is not there fails"
+)]
+pub fn fixture_movie_box(name: &str) -> MovieBox {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../isobmff/tests/fixtures")
+        .join(name);
+    let bytes = fs::read(&path).unwrap_or_else(|error| panic!("{name}: {error}"));
+    movie_box(&bytes, name).unwrap_or_else(|| panic!("{name} holds no moov"))
+}
+
 /// Returns the conformance files in the directory `ISOBMFF_CONFORMANCE_DIR` names, in the order of their names
 ///
 /// # Panics

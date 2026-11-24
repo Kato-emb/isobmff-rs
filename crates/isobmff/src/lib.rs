@@ -5,7 +5,9 @@
 //! of its samples: their timing, and where their bytes lie, as a data offset
 //! from a [`DataOrigin`] in the container a data reference entry specifies;
 //! its [`MovieReader`](structure_data::MovieReader) reads them for every
-//! track of a `moov`.
+//! track of a `moov`, and its
+//! [`DataOrigins`](structure_data::data_layout::DataOrigins) puts each at its
+//! file offset.
 //! [`SampleProperties`] and [`SampleLocation`] hold what it declares of one
 //! sample. The boxes themselves are read and written with [`boxes`], and the
 //! header of a box, the values its fields carry and the traits a box
